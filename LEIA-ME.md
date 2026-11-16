@@ -1,37 +1,34 @@
 # Racha Criativo — lista do vôlei
 
-Site para a lista do vôlei de domingo. Feito em HTML + JavaScript puro, publicado no GitHub Pages.
+Site da lista do vôlei de domingo. HTML + JavaScript puro no GitHub Pages, dados no Supabase (grátis).
 
 ## Como funciona
 
-- **Pedir acesso:** na primeira vez a pessoa manda o nome. Um organizador aprova.
-- **Lista:** quem foi aprovado toca em **Entrar**. A ordem é a hora em que o **servidor** recebe a inscrição, então não tem bagunça quando todo mundo entra junto.
-- **Abertura:** o organizador define a hora em que a lista abre. Antes disso aparece uma contagem regressiva, e o servidor recusa inscrições adiantadas.
-- **Espera:** passou do número de vagas, vai para a espera. Se alguém sair, o primeiro da espera sobe sozinho.
-- **Convidados:** cada membro pode levar convidado. Convidados ficam depois de todos os membros.
+- **Conta:** cada pessoa cria usuário e senha. O site avisa para **não usar uma senha de verdade**.
+- **Aprovação:** contas novas ficam "aguardando aprovação" até um organizador aprovar.
+- **Listas:** só organizadores criam listas (data, horário, vagas, valor, Pix e a hora em que a lista abre). Dá para ter mais de uma lista ao mesmo tempo e repetir a da semana passada com um toque.
+- **Ordem justa:** a hora de cada inscrição é marcada pelo servidor, com microssegundos. Antes da hora de abertura o servidor recusa inscrições.
+- **Espera e convidados:** quem passa das vagas vai para a espera e sobe sozinho quando alguém sai. Convidados ficam depois dos membros.
 - **Pagamento:** chave Pix com botão de copiar. A pessoa toca em **Já paguei** e o organizador confirma.
-- **Copiar lista:** gera o texto no formato do grupo do WhatsApp, com ✅ para quem pagou.
-- **Organizador:** link "Sou o organizador" no rodapé, com PIN. Aprova pessoas, confirma pagamentos, remove gente, muda data, vagas, valor, Pix e abre a semana nova.
+- **Copiar p/ WhatsApp:** texto no formato do grupo, com ✅ para quem pagou.
+- **Organizador:** aprova e bloqueia pessoas, torna outras pessoas admin, confirma pagamentos e remove gente da lista.
 
-Sem configurar o Firebase o site roda em **modo teste** (dados só no seu navegador, PIN `1234`).
+## Configurar o Supabase (uma vez, uns 10 minutos)
 
-## Ligar o modo online (Firebase, grátis) — uns 10 minutos
+1. Entre em https://supabase.com, crie uma conta e um **New project**. Região: **South America (São Paulo)**.
+2. **SQL Editor** > New query > cole todo o arquivo `supabase.sql` > **Run**.
+3. **Authentication** > **Sign In / Providers** > **Email** > desligue **Confirm email** > Save.
+   (Os usuários entram com apelido. Nenhum e-mail é enviado.)
+4. **Authentication** > **Users** > **Add user** > **Create new user**: seu e-mail e uma senha forte, marque **Auto Confirm User**.
+5. **SQL Editor** de novo, rode (com seu e-mail e nome):
+   ```sql
+   update public.profiles set is_admin = true, status = 'approved', name = 'SEU NOME'
+     where id = (select id from auth.users where email = 'SEU-EMAIL');
+   ```
+6. **Project Settings** > **API**: copie a **Project URL** e a chave **anon public** para o `config.js`.
+7. Envie para o GitHub. Em 1 minuto o site atualiza.
 
-1. Entre em https://console.firebase.google.com e crie um projeto (pode desligar o Google Analytics).
-2. **Authentication** > Começar > aba **Método de login** > ative **Anônimo**.
-3. **Authentication** > **Configurações** > **Domínios autorizados** > adicione `www.wita.com.br` (o domínio onde o site está publicado).
-4. **Firestore Database** > Criar banco de dados > modo de produção > região `southamerica-east1` (São Paulo).
-5. **Firestore** > aba **Regras** > apague tudo, cole o conteúdo de `firestore.rules` e clique **Publicar**.
-6. **Firestore** > aba **Dados** > crie a coleção `secret`, documento com ID `admin`, campo `pin` (tipo string) com o PIN dos organizadores. Esse PIN nunca aparece no site.
-7. Engrenagem > **Configurações do projeto** > "Seus apps" > ícone `</>` (Web) > registre o app. Copie o objeto `firebaseConfig` e cole em `config.js` no lugar de `firebase: null`.
-8. Envie a mudança para o GitHub (`git add . && git commit -m "Liga Firebase" && git push`). Em 1 minuto o site atualiza.
-9. Abra o site, toque em **Sou o organizador**, digite o PIN e configure data, vagas, Pix e hora de abertura. Depois peça acesso com seu próprio nome e aprove a si mesmo.
-
-## Bom saber
-
-- O acesso fica ligado ao **aparelho/navegador**. Se alguém trocar de celular ou limpar os dados do navegador, precisa pedir acesso de novo.
-- Trocar o PIN em `secret/admin` desconecta todos os organizadores.
-- Mudar a data do jogo começa uma lista vazia. As listas antigas ficam guardadas no Firestore em `weeks/`.
+Organizadores entram com o **e-mail** no campo "Usuário". As outras pessoas usam o apelido que criaram.
 
 ## Testar no computador
 

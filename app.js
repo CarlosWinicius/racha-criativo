@@ -1,408 +1,584 @@
-// Racha Criativo — lista do vôlei
-// Dados: Firebase Firestore (online) ou localStorage (modo teste).
+// Racha Criativo — lista do vôlei (Supabase)
+"use strict";
 
 const $ = (s) => document.querySelector(s);
 const CONF = window.VOLEI_CONFIG || {};
+const configured = !!(CONF.supabaseUrl && CONF.supabaseKey && window.supabase);
+const sb = configured ? window.supabase.createClient(CONF.supabaseUrl, CONF.supabaseKey) : null;
+const EMAIL_DOMAIN = "racha-criativo.app"; // usuários viram "apelido@racha-criativo.app" (nenhum e-mail é enviado)
 
-const LS = {
-  get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
-  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
-  del(k) { try { localStorage.removeItem(k); } catch {} },
-};
-
-// ---------- datas ----------
+// ---------- utilidades ----------
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const pad = (n) => String(n).padStart(2, "0");
-function nextSunday(from = new Date()) {
-  const d = new Date(from);
-  d.setHours(12, 0, 0, 0);
-  d.setDate(d.getDate() + ((7 - d.getDay()) % 7 || 7));
-  return d;
-}
 const isoDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const parseDate = (s) => { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d, 12); };
-const WEEKDAYS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
-const fmtDay = (s) => { const d = parseDate(s); return `${WEEKDAYS[d.getDay()]} (${pad(d.getDate())}/${pad(d.getMonth() + 1)})`; };
-const fmtHour = (t) => (t || "").replace(/^0/, "").replace(":00", "h").replace(":", "h");
-const toLocalInput = (ms) => { const d = new Date(ms); return `${isoDate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-const money = (v) => "R$ " + Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: v % 1 ? 2 : 0, maximumFractionDigits: 2 });
-
-function defaultConfig() {
-  const date = isoDate(nextSunday());
-  return { title: "Racha Criativo", date, weekId: date, start: "16:00", end: "19:00", spots: 18, price: 10, pixKey: "", pixName: "", opensAtMs: 0 };
+const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
+const todayISO = () => isoDate(new Date());
+const WD = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+const WD3 = ["dom", "seg", "ter", "qua", "qui", "sex", "sáb"];
+const MO3 = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+const hour = (t) => { if (!t) return ""; const [h, m] = t.split(":"); return Number(h) + "h" + (m && m !== "00" ? m : ""); };
+const money = (v) => "R$ " + Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: Number(v) % 1 ? 2 : 0, maximumFractionDigits: 2 });
+const clean = (s) => String(s || "").replace(/\s+/g, " ").trim().slice(0, 40);
+const toLocalInput = (iso) => { const d = new Date(iso); return `${isoDate(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const fmtOpen = (iso) => { const d = new Date(iso); return `${WD3[d.getDay()]}, ${pad(d.getDate())}/${pad(d.getMonth() + 1)} às ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+function nextSunday(from = new Date()) { const d = new Date(from); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + ((7 - d.getDay()) % 7 || 7)); return d; }
+function countdown(ms) {
+  if (ms <= 0) return "agora";
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000), s = Math.floor((ms % 60000) / 1000);
+  if (h >= 48) return Math.floor(h / 24) + " dias";
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
-
-// ---------- armazenamento: modo teste ----------
-function localStore() {
-  const KEY = "volei-demo-v1";
-  const read = () => { const d = LS.get(KEY, {}); return { config: null, entries: {}, members: {}, ...d }; };
-  let cfgFns = [], entFns = [], meFns = [], memFns = [];
-  const emit = () => {
-    const d = read();
-    cfgFns.forEach((f) => f(d.config));
-    entFns.forEach(({ weekId, fn }) => fn(Object.values(d.entries).filter((e) => e.weekId === weekId)));
-    meFns.forEach((f) => f(d.members[uid] || null));
-    memFns.forEach((f) => f(Object.values(d.members)));
-  };
-  const write = (d) => { LS.set(KEY, d); emit(); };
-  window.addEventListener("storage", (e) => { if (e.key === KEY) emit(); });
-  let uid = LS.get("volei-uid", null);
-  if (!uid) { uid = Math.random().toString(36).slice(2); LS.set("volei-uid", uid); }
-  return {
-    mode: "demo", uid,
-    onConfig(fn) { cfgFns.push(fn); fn(read().config); },
-    onEntries(weekId, fn) {
-      const h = { weekId, fn }; entFns.push(h);
-      fn(Object.values(read().entries).filter((e) => e.weekId === weekId));
-      return () => { entFns = entFns.filter((x) => x !== h); };
-    },
-    async setConfig(c) { const d = read(); d.config = { ...(d.config || {}), ...c }; write(d); },
-    async addEntry(weekId, e) {
-      const d = read(); const id = Math.random().toString(36).slice(2);
-      d.entries[id] = { ...e, id, weekId, createdAt: Date.now() }; write(d);
-    },
-    async updateEntry(weekId, id, p) { const d = read(); if (d.entries[id]) Object.assign(d.entries[id], p); write(d); },
-    async deleteEntry(weekId, id) { const d = read(); delete d.entries[id]; write(d); },
-    async adminLogin(pin) { if (pin !== String(CONF.demoPin || "1234")) throw new Error("PIN errado"); },
-    onMyMember(fn) { meFns.push(fn); fn(read().members[uid] || null); },
-    onMembers(fn) { memFns.push(fn); fn(Object.values(read().members)); return () => { memFns = memFns.filter((x) => x !== fn); }; },
-    async requestAccess(name) { const d = read(); d.members[uid] = { uid, name, status: "pending", requestedAt: Date.now() }; write(d); },
-    async setMemberStatus(id, status) { const d = read(); if (d.members[id]) d.members[id].status = status; write(d); },
-    async deleteMember(id) { const d = read(); delete d.members[id]; write(d); },
-  };
+function userToEmail(u) {
+  u = String(u || "").trim().toLowerCase();
+  if (u.includes("@")) return u;
+  return u.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9._-]/g, "") + "@" + EMAIL_DOMAIN;
 }
-
-// ---------- armazenamento: Firebase ----------
-function loadScript(src) {
-  return new Promise((ok, fail) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => fail(new Error("Falha ao carregar " + src)); document.head.appendChild(s); });
-}
-async function firebaseStore(cfg) {
-  const v = "10.12.2", base = `https://www.gstatic.com/firebasejs/${v}/`;
-  await loadScript(base + "firebase-app-compat.js");
-  await Promise.all([loadScript(base + "firebase-auth-compat.js"), loadScript(base + "firebase-firestore-compat.js")]);
-  firebase.initializeApp(cfg);
-  const cred = await firebase.auth().signInAnonymously();
-  const db = firebase.firestore();
-  const cfgRef = db.doc("config/current");
-  const entries = (weekId) => db.collection("weeks").doc(weekId).collection("entries");
-  return {
-    mode: "online", uid: cred.user.uid,
-    onConfig(fn) { cfgRef.onSnapshot((s) => fn(s.exists ? s.data() : null), showError); },
-    onEntries(weekId, fn) {
-      return entries(weekId).onSnapshot((q) => fn(q.docs.map((d) => {
-        const x = d.data({ serverTimestamps: "estimate" });
-        return { ...x, id: d.id, createdAt: x.createdAt && x.createdAt.toMillis ? x.createdAt.toMillis() : Date.now() };
-      })), showError);
-    },
-    setConfig(c) { return cfgRef.set(c, { merge: true }); },
-    addEntry(weekId, e) { return entries(weekId).add({ ...e, createdAt: firebase.firestore.FieldValue.serverTimestamp() }); },
-    updateEntry(weekId, id, p) { return entries(weekId).doc(id).update(p); },
-    deleteEntry(weekId, id) { return entries(weekId).doc(id).delete(); },
-    async adminLogin(pin) {
-      try { await db.doc("adminSessions/" + cred.user.uid).set({ pin }); }
-      catch { throw new Error("PIN errado"); }
-    },
-    onMyMember(fn) { db.doc("members/" + cred.user.uid).onSnapshot((s) => fn(s.exists ? s.data() : null), showError); },
-    onMembers(fn) {
-      return db.collection("members").onSnapshot((q) => fn(q.docs.map((d) => {
-        const x = d.data({ serverTimestamps: "estimate" });
-        return { ...x, uid: d.id, requestedAt: x.requestedAt && x.requestedAt.toMillis ? x.requestedAt.toMillis() : Date.now() };
-      })), (e) => { if (e.code === "permission-denied") adminExpired(); else showError(e); });
-    },
-    requestAccess(name) {
-      return db.doc("members/" + cred.user.uid).set({ uid: cred.user.uid, name, status: "pending", requestedAt: firebase.firestore.FieldValue.serverTimestamp() });
-    },
-    setMemberStatus(id, status) { return db.doc("members/" + id).update({ status }); },
-    deleteMember(id) { return db.doc("members/" + id).delete(); },
-  };
+function errMsg(e) {
+  const m = (e && (e.message || e.error_description)) || String(e);
+  if (/Invalid login credentials/i.test(m)) return "Usuário ou senha errados.";
+  if (/already registered|already been registered/i.test(m)) return "Esse usuário já existe. Escolha outro.";
+  if (/Password should be at least/i.test(m)) return "A senha precisa ter pelo menos 6 caracteres.";
+  if (/rate limit|too many/i.test(m)) return "Muitas tentativas. Espere um minuto e tente de novo.";
+  if (/Failed to fetch|NetworkError/i.test(m)) return "Sem conexão. Confira a internet e tente de novo.";
+  return m;
 }
 
 // ---------- estado ----------
-let store, config = null, list = [], unsubEntries = null, isAdmin = LS.get("volei-admin", false);
-let me = null, meLoaded = false, members = [], unsubMembers = null;
-const approved = () => me && me.status === "approved";
+let session = null, me = null, meLoaded = false;
+let lists = [], listsLoaded = false, entries = {}, members = [];
+let route = parseRoute(), authTab = "login", adminTab = "lists";
+let channel = null;
 
-function adminExpired() {
-  isAdmin = false; LS.del("volei-admin"); stopMembers(); render();
-  toast("Seu acesso de organizador expirou. Entre de novo com o PIN.");
+function parseRoute() {
+  const h = location.hash.slice(1);
+  if (h.startsWith("l-")) return { name: "list", id: h.slice(2) };
+  if (h === "admin") return { name: "admin" };
+  return { name: "home" };
 }
-function startMembers() { if (!unsubMembers) unsubMembers = store.onMembers((m) => { members = m; renderMembers(); }); }
-function stopMembers() { if (unsubMembers) { unsubMembers(); unsubMembers = null; } members = []; }
+const uid = () => session && session.user.id;
+const approved = () => me && (me.status === "approved" || me.is_admin);
 
-function toast(msg) {
-  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
-  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+// ---------- dados ----------
+async function refresh() {
+  if (!session) return;
+  try {
+    const p = await sb.from("profiles").select("*").eq("id", uid()).maybeSingle();
+    if (p.error) throw p.error;
+    me = p.data; meLoaded = true;
+    if (approved()) {
+      const since = isoDate(addDays(new Date(), -14));
+      const l = await sb.from("lists").select("*").gte("game_date", since).order("game_date").order("start_time");
+      if (l.error) throw l.error;
+      lists = l.data || []; listsLoaded = true;
+      const ids = lists.map((x) => x.id);
+      const next = {};
+      ids.forEach((id) => (next[id] = []));
+      if (ids.length) {
+        const e = await sb.from("entries").select("*").in("list_id", ids).order("created_at").order("id");
+        if (e.error) throw e.error;
+        (e.data || []).forEach((x) => next[x.list_id] && next[x.list_id].push(x));
+      }
+      entries = next;
+    }
+    if (me && me.is_admin) {
+      const m = await sb.from("profiles").select("*").order("created_at");
+      if (!m.error) members = m.data || [];
+    }
+  } catch (e) { toast(errMsg(e)); }
+  render();
 }
-function showError(err) {
-  console.error(err);
-  const code = err && err.code;
-  if (code === "permission-denied") toast("Não deu: a lista ainda está fechada ou você não tem permissão.");
-  else toast("Erro: " + (err && err.message ? err.message : err));
-}
+let refreshTimer;
+const scheduleRefresh = () => { clearTimeout(refreshTimer); refreshTimer = setTimeout(refresh, 250); };
 
-// Membros por ordem de chegada, depois convidados por ordem de chegada.
-function ordered() {
-  const byTime = (a, b) => a.createdAt - b.createdAt || String(a.id).localeCompare(String(b.id));
-  const m = list.filter((e) => e.type !== "convidado").sort(byTime);
-  const g = list.filter((e) => e.type === "convidado").sort(byTime);
-  const all = m.concat(g), n = Number(config.spots) || 18;
+function startRealtime() {
+  if (channel) return;
+  channel = sb.channel("racha")
+    .on("postgres_changes", { event: "*", schema: "public", table: "entries" }, scheduleRefresh)
+    .on("postgres_changes", { event: "*", schema: "public", table: "lists" }, scheduleRefresh)
+    .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, scheduleRefresh)
+    .subscribe();
+}
+function stopRealtime() { if (channel) { sb.removeChannel(channel); channel = null; } }
+
+// Membros por ordem de chegada (hora do servidor), depois convidados.
+function ordered(l) {
+  const es = entries[l.id] || [];
+  const byTime = (a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id < b.id ? -1 : 1);
+  const all = es.filter((e) => e.kind === "membro").sort(byTime).concat(es.filter((e) => e.kind === "convidado").sort(byTime));
+  const n = Number(l.spots) || 18;
   return { main: all.slice(0, n), wait: all.slice(n), spots: n };
 }
-
-const isOpen = () => !config.opensAtMs || Date.now() >= config.opensAtMs;
+function myPlace(l) {
+  const { main, wait } = ordered(l);
+  let i = main.findIndex((e) => e.user_id === uid() && e.kind === "membro");
+  if (i >= 0) return { where: "main", n: i + 1, entry: main[i] };
+  i = wait.findIndex((e) => e.user_id === uid() && e.kind === "membro");
+  if (i >= 0) return { where: "wait", n: i + 1, entry: wait[i] };
+  return null;
+}
+const isPast = (l) => l.game_date < todayISO();
+const isOpen = (l) => !l.opens_at || Date.now() >= new Date(l.opens_at).getTime();
 
 // ---------- render ----------
 function render() {
-  if (!config) return;
-  const { main, wait, spots } = ordered();
-  document.title = config.title || "Racha Criativo";
-  $("#title").textContent = config.title || "Racha Criativo";
-  $("#when").textContent = `${fmtDay(config.date)} · ${fmtHour(config.start)}–${fmtHour(config.end)}`;
-  $("#sConf").textContent = `${main.length}/${spots}`;
-  $("#sWait").textContent = wait.length;
-  $("#sPaid").textContent = main.filter((e) => e.paid === "confirmed").length;
-  $("#fill").style.width = Math.min(100, (main.length / spots) * 100) + "%";
-  $("#listCount").textContent = main.length >= spots ? "lotada" : `${spots - main.length} vagas`;
+  // guarda o que a pessoa está digitando
+  const keep = {}; let focusId = null;
+  document.querySelectorAll("#app input").forEach((i) => { if (i.id) keep[i.id] = i.value; });
+  if (document.activeElement && document.activeElement.closest("#app")) focusId = document.activeElement.id;
 
-  // lista principal com vagas vazias numeradas, como no grupo
-  const ml = $("#mainList"); ml.replaceChildren();
-  for (let i = 0; i < spots; i++) ml.appendChild(main[i] ? row(main[i], i + 1, true) : emptyRow(i + 1));
-  const wl = $("#waitList"); wl.replaceChildren();
-  if (!wait.length) { const li = emptyRow("–"); li.querySelector(".who").textContent = "Ninguém na espera"; wl.appendChild(li); }
-  wait.forEach((e, i) => wl.appendChild(row(e, i + 1, false)));
+  let html;
+  if (!configured) html = viewNotConfigured();
+  else if (session === null) html = viewAuth();
+  else if (!meLoaded) html = viewLoading();
+  else if (!me) html = viewNoProfile();
+  else if (!approved()) html = viewPending();
+  else if (route.name === "admin") html = me.is_admin ? viewAdmin() : viewHome();
+  else if (route.name === "list") html = viewList(route.id);
+  else html = viewHome();
+  $("#app").innerHTML = html;
 
-  // pagamento
-  $("#price").textContent = money(config.price);
-  $("#pixKey").textContent = config.pixKey || "O organizador ainda não cadastrou a chave";
-  $("#pixName").textContent = config.pixName ? "Para: " + config.pixName : "";
-  $("#copyPix").disabled = !config.pixKey;
-
-  // acesso: sem cadastro -> pedir; pendente/recusado -> aviso; aprovado -> pode entrar
-  $("#accessCard").hidden = !meLoaded || !!me;
-  $("#pendingCard").hidden = !me || me.status === "approved";
-  if (me && me.status === "pending") $("#pendingMsg").textContent = `Pedido enviado como "${me.name}". Assim que um organizador aprovar, esta tela muda sozinha.`;
-  if (me && me.status === "rejected") $("#pendingMsg").textContent = "Seu pedido não foi aprovado. Fale com um organizador no grupo.";
-  $("#joinCard").hidden = !approved();
-
-  renderOpenState();
-  const mine = list.filter((e) => e.uid === store.uid && e.type !== "convidado");
-  $("#joinName").value = approved() ? me.name : "";
-  $("#joinBtn").disabled = !isOpen() || mine.length > 0 || !approved();
-  $("#guestBtn").disabled = !isOpen() || mine.length === 0;
-
-  $("#adminCard").hidden = !isAdmin;
-  $("#requestsCard").hidden = !isAdmin;
-  $("#adminOpen").hidden = isAdmin;
-  renderMembers();
+  for (const id in keep) { const el = document.getElementById(id); if (el && el.type !== "password") el.value = keep[id]; }
+  if (focusId) { const el = document.getElementById(focusId); if (el) el.focus(); }
+  renderTopbar(); renderBar(); tick();
 }
 
-function renderMembers() {
-  if (!isAdmin) return;
-  const pending = members.filter((m) => m.status === "pending").sort((a, b) => a.requestedAt - b.requestedAt);
-  const ok = members.filter((m) => m.status === "approved").sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
-  $("#reqCount").textContent = pending.length ? pending.length + " esperando" : "";
-  $("#memCount").textContent = ok.length;
-  const rl = $("#reqList"); rl.replaceChildren();
-  if (!pending.length) { const li = emptyRow("–"); li.querySelector(".who").textContent = "Nenhum pedido novo"; rl.appendChild(li); }
-  pending.forEach((m, i) => {
-    const li = memberRow(m, i + 1);
-    li.querySelector(".acts").append(
-      btn("Aprovar", "sm", () => store.setMemberStatus(m.uid, "approved").then(() => toast(m.name + " aprovado."), showError)),
-      confirmBtn("Recusar", () => store.setMemberStatus(m.uid, "rejected").catch(showError)));
-    rl.appendChild(li);
-  });
-  const ml = $("#memList"); ml.replaceChildren();
-  ok.forEach((m, i) => {
-    const li = memberRow(m, i + 1);
-    li.querySelector(".acts").append(confirmBtn("Remover", () => store.deleteMember(m.uid).then(() => toast(m.name + " removido."), showError)));
-    ml.appendChild(li);
-  });
-}
-function memberRow(m, n) {
-  const li = document.createElement("li");
-  li.innerHTML = `<span class="num">${n}.</span><span class="who"><b></b><span class="sub"></span></span><span class="acts"></span>`;
-  li.querySelector("b").textContent = m.name;
-  li.querySelector(".sub").textContent = "pediu em " + new Date(m.requestedAt).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-  return li;
+function renderTopbar() {
+  const inside = session && me && approved();
+  $("#backBtn").hidden = !(inside && route.name !== "home");
+  $("#adminBtn").hidden = !(inside && me.is_admin);
+  $("#adminBtn").classList.toggle("on", route.name === "admin");
+  $("#meBtn").hidden = !session || session === undefined;
+  if (session && me) $("#meBtn").textContent = (me.name || "?").trim().charAt(0).toUpperCase();
 }
 
-function renderOpenState() {
-  const box = $("#openState"), { main, wait } = ordered();
-  const mine = [...main.map((e, i) => [e, i + 1, "lista"]), ...wait.map((e, i) => [e, i + 1, "espera"])]
-    .find(([e]) => e.uid === store.uid && e.type !== "convidado");
-  if (!isOpen()) {
-    const left = config.opensAtMs - Date.now();
-    const h = Math.floor(left / 3600000), m = Math.floor((left % 3600000) / 60000), s = Math.floor((left % 60000) / 1000);
-    const d = new Date(config.opensAtMs);
-    box.className = "notice wait";
-    box.innerHTML = `A lista abre ${WEEKDAYS[d.getDay()].toLowerCase()} às ${pad(d.getHours())}:${pad(d.getMinutes())}<span class="countdown">${h > 47 ? Math.floor(h / 24) + " dias" : `${pad(h)}:${pad(m)}:${pad(s)}`}</span>`;
-  } else if (mine) {
-    box.className = "notice ok";
-    box.textContent = mine[2] === "lista" ? `Você está na lista: nº ${mine[1]}.` : `Você está na espera: nº ${mine[1]}. Se alguém sair, você sobe.`;
-  } else { box.className = ""; box.textContent = ""; }
+const viewLoading = () => `<div class="empty"><div class="spinner" aria-hidden="true"></div><p class="muted">Carregando…</p></div>`;
+const viewNotConfigured = () => `<div class="empty"><h1 class="title">Site em configuração</h1><p class="muted">O organizador ainda está ligando o banco de dados. Volte daqui a pouco.</p></div>`;
+const viewNoProfile = () => `<div class="empty"><h1 class="title">Conta sem perfil</h1><p class="muted">Sua conta existe, mas o perfil não foi criado. Avise um organizador.</p><button class="btn ghost" data-act="logout">Sair da conta</button></div>`;
+
+function viewAuth() {
+  const login = authTab === "login";
+  return `
+  <section class="intro">
+    <span class="eyebrow">Vôlei de domingo</span>
+    <h1 class="title big">Racha Criativo</h1>
+    <p class="muted">Entre na lista do jogo, veja sua posição e pague pelo Pix.</p>
+  </section>
+  <section class="card">
+    <div class="seg" role="tablist">
+      <button role="tab" class="${login ? "on" : ""}" data-act="authTab" data-tab="login">Entrar</button>
+      <button role="tab" class="${!login ? "on" : ""}" data-act="authTab" data-tab="signup">Criar conta</button>
+    </div>
+    ${login ? `
+    <form data-form="login" class="stack">
+      <label class="field">Usuário<input id="lUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="seu apelido"></label>
+      <label class="field">Senha<input id="lPass" type="password" autocomplete="current-password" required></label>
+      <button class="btn lg" type="submit">Entrar</button>
+    </form>` : `
+    <form data-form="signup" class="stack">
+      <label class="field">Seu nome na lista<input id="sName" type="text" maxlength="40" required placeholder="Ex.: Carlos" autocomplete="nickname"></label>
+      <label class="field">Usuário<input id="sUser" type="text" maxlength="24" required placeholder="Ex.: carlos.vb" autocapitalize="none" spellcheck="false" autocomplete="username"><small>Só letras, números, ponto e traço. Você usa para entrar.</small></label>
+      <label class="field">Senha<input id="sPass" type="password" minlength="6" required autocomplete="new-password"><small>Pelo menos 6 caracteres.</small></label>
+      <div class="notice warn"><b>Não use uma senha de verdade.</b> Nada de senha do e-mail, banco ou Instagram. Crie uma senha só para o vôlei.</div>
+      <button class="btn lg" type="submit">Criar conta</button>
+      <p class="small muted center">Depois de criar, um organizador precisa aprovar seu acesso.</p>
+    </form>`}
+  </section>`;
 }
 
-function emptyRow(n) {
-  const li = document.createElement("li"); li.className = "empty";
-  li.innerHTML = `<span class="num">${n}.</span><span class="who">vaga livre</span><span></span>`;
-  return li;
+function viewPending() {
+  const rejected = me.status === "rejected";
+  return `<div class="empty">
+    <div class="ball" aria-hidden="true"></div>
+    <h1 class="title">${rejected ? "Acesso não aprovado" : "Aguardando aprovação"}</h1>
+    <p class="muted">${rejected ? "Um organizador recusou seu acesso. Fale com eles no grupo." : `Oi, <b>${esc(me.name)}</b>! Sua conta foi criada. Assim que um organizador aprovar, esta tela muda sozinha.`}</p>
+    <button class="btn ghost" data-act="logout">Sair da conta</button>
+  </div>`;
 }
 
-const PAID_LABEL = { no: "não pagou", informed: "aguardando", confirmed: "pago" };
+function dateBadge(l) {
+  const d = parseDate(l.game_date);
+  return `<span class="dbadge"><small>${WD3[d.getDay()]}</small><b>${pad(d.getDate())}</b><small>${MO3[d.getMonth()]}</small></span>`;
+}
 
-function row(e, n, inMain) {
-  const li = document.createElement("li");
-  const mineRow = e.uid === store.uid;
-  if (mineRow) li.classList.add("mine");
-  const num = document.createElement("span"); num.className = "num"; num.textContent = n + ".";
-  const who = document.createElement("span"); who.className = "who";
-  const b = document.createElement("b"); b.textContent = e.name; who.appendChild(b);
-  if (e.type === "convidado") {
-    const t = document.createElement("span"); t.className = "tag"; t.textContent = "convidado"; who.appendChild(t);
-    const s = document.createElement("span"); s.className = "sub"; s.textContent = "de " + (e.invitedBy || "?"); who.appendChild(s);
+function statusChip(l) {
+  const { main, wait, spots } = ordered(l), mine = myPlace(l);
+  if (isPast(l)) return `<span class="chip">encerrada</span>`;
+  if (mine) return `<span class="chip me">${mine.where === "main" ? "você: nº " + mine.n : "espera: nº " + mine.n}</span>`;
+  if (!isOpen(l)) return `<span class="chip warn">abre ${esc(fmtOpen(l.opens_at))}</span>`;
+  if (main.length >= spots) return `<span class="chip bad">lotada${wait.length ? " · " + wait.length + " na espera" : ""}</span>`;
+  return `<span class="chip ok">aberta</span>`;
+}
+
+function viewHome() {
+  const up = lists.filter((l) => !isPast(l));
+  const cards = up.map((l) => {
+    const { main, spots } = ordered(l), d = parseDate(l.game_date);
+    return `<a class="game" href="#l-${l.id}">
+      ${dateBadge(l)}
+      <span class="game-body">
+        <b>${esc(l.title)}</b>
+        <span class="small muted">${WD[d.getDay()]} · ${hour(l.start_time)}–${hour(l.end_time)} · ${main.length}/${spots}</span>
+        <span class="meter"><i style="width:${Math.min(100, (main.length / spots) * 100)}%"></i></span>
+        ${statusChip(l)}
+      </span>
+      <span class="chev" aria-hidden="true">›</span>
+    </a>`;
+  }).join("");
+  return `
+  <section class="intro">
+    <span class="eyebrow">Olá, ${esc(me.name)}</span>
+    <h1 class="title">Próximos jogos</h1>
+  </section>
+  ${up.length ? `<div class="games">${cards}</div>` : `
+  <div class="empty card">
+    <div class="ball" aria-hidden="true"></div>
+    <h2 class="h2">Nenhuma lista aberta</h2>
+    <p class="muted">${me.is_admin ? "Crie a lista do próximo domingo na área do organizador." : "Os organizadores criam a lista da semana. Ela aparece aqui."}</p>
+    ${me.is_admin ? `<a class="btn" href="#admin">Criar lista</a>` : ""}
+  </div>`}`;
+}
+
+function pill(paid) {
+  const t = { no: "não pagou", informed: "aguardando", confirmed: "pago" }[paid || "no"];
+  return `<span class="pill ${paid || "no"}">${t}</span>`;
+}
+function rowHtml(l, e, n, inMain) {
+  const mineRow = e.user_id === uid();
+  const can = mineRow || me.is_admin;
+  const inner = `<span class="num">${n}</span>
+    <span class="who"><b>${esc(e.name)}</b>${e.kind === "convidado" ? `<small>convidado de ${esc(e.invited_by)}</small>` : ""}</span>
+    ${inMain ? pill(e.paid) : ""}${can ? `<span class="chev" aria-hidden="true">›</span>` : ""}`;
+  return `<li class="${mineRow ? "mine" : ""}">${can
+    ? `<button class="rowbtn" type="button" data-act="row" data-list="${l.id}" data-id="${e.id}" aria-label="Opções de ${esc(e.name)}">${inner}</button>`
+    : `<div class="rowbtn">${inner}</div>`}</li>`;
+}
+
+function viewList(id) {
+  const l = lists.find((x) => x.id === id);
+  if (!l) return listsLoaded ? `<div class="empty"><h1 class="title">Lista não encontrada</h1><p class="muted">Ela pode ter sido apagada.</p><a class="btn" href="#">Ver jogos</a></div>` : viewLoading();
+  const { main, wait, spots } = ordered(l), mine = myPlace(l), d = parseDate(l.game_date);
+  const paidCount = main.filter((e) => e.paid === "confirmed").length;
+  let notice = "";
+  if (isPast(l)) notice = `<div class="notice">Esse jogo já passou.</div>`;
+  else if (!isOpen(l)) notice = `<div class="notice warn">A lista abre ${esc(fmtOpen(l.opens_at))}<span class="cd" data-cd="${l.opens_at}"></span></div>`;
+  else if (mine && mine.where === "main") notice = `<div class="notice ok">Você é o <b>nº ${mine.n}</b> da lista.</div>`;
+  else if (mine) notice = `<div class="notice warn">Você é o <b>nº ${mine.n}</b> da espera. Se alguém sair, você sobe sozinho.</div>`;
+  else if (main.length >= spots) notice = `<div class="notice">Lista lotada. Se entrar agora, você vai para a espera.</div>`;
+
+  return `
+  <section class="hero">
+    <div class="hero-top">
+      ${dateBadge(l)}
+      <div class="hero-txt">
+        <span class="eyebrow">${WD[d.getDay()]} · ${hour(l.start_time)}–${hour(l.end_time)}</span>
+        <h1>${esc(l.title)}</h1>
+      </div>
+    </div>
+    <div class="score">
+      <div><b>${main.length}<small>/${spots}</small></b><span>na lista</span></div>
+      <div><b>${wait.length}</b><span>na espera</span></div>
+      <div><b>${paidCount}</b><span>pagos</span></div>
+    </div>
+    <div class="meter light"><i style="width:${Math.min(100, (main.length / spots) * 100)}%"></i></div>
+  </section>
+  ${notice}
+  <section class="card flush">
+    <h2 class="h2 pad">Lista <small>${main.length >= spots ? "lotada" : spots - main.length + " vagas livres"}</small></h2>
+    <ol class="rows">
+      ${main.map((e, i) => rowHtml(l, e, i + 1, true)).join("")}
+      ${main.length < spots ? `<li class="free"><span class="num">${main.length + 1}</span><span>${main.length + 1 === spots ? "última vaga livre" : `vagas ${main.length + 1} a ${spots} livres`}</span></li>` : ""}
+    </ol>
+  </section>
+  ${wait.length ? `<section class="card flush">
+    <h2 class="h2 pad">Espera <small>sobe sozinho se alguém sair</small></h2>
+    <ol class="rows">${wait.map((e, i) => rowHtml(l, e, i + 1, false)).join("")}</ol>
+  </section>` : ""}
+  <div class="tools">
+    ${mine && !isPast(l) ? `<button class="btn ghost" data-act="guest" data-list="${l.id}">+ Convidado</button>` : ""}
+    <button class="btn ghost" data-act="pix" data-list="${l.id}">Pix ${money(l.price)}</button>
+    <button class="btn ghost" data-act="copy" data-list="${l.id}">Copiar p/ WhatsApp</button>
+  </div>`;
+}
+
+function renderBar() {
+  const bar = $("#bar");
+  const l = route.name === "list" && approved() && lists.find((x) => x.id === route.id);
+  if (!l || isPast(l)) { bar.hidden = true; document.body.classList.remove("has-bar"); return; }
+  const { main, spots } = ordered(l), mine = myPlace(l);
+  let h;
+  if (!isOpen(l)) h = `<button class="btn lg" disabled>Abre em&nbsp;<span data-cd="${l.opens_at}"></span></button>`;
+  else if (!mine) h = `<button class="btn lg" data-act="join" data-list="${l.id}">${main.length >= spots ? "Entrar na espera" : "Entrar na lista"}</button>`;
+  else if (mine.where === "wait") h = `<span class="bar-txt">Espera: nº ${mine.n}</span><button class="btn lg ghost" data-act="leave" data-list="${l.id}" data-id="${mine.entry.id}" data-confirm="Sair da espera?">Sair da espera</button>`;
+  else if ((mine.entry.paid || "no") === "no") h = `<button class="btn lg yellow" data-act="pix" data-list="${l.id}">Pagar ${money(l.price)}</button><button class="btn lg ghost narrow" data-act="leave" data-list="${l.id}" data-id="${mine.entry.id}" data-confirm="Sair?">Sair</button>`;
+  else h = `<span class="bar-txt">${mine.entry.paid === "confirmed" ? "Pagamento confirmado" : "Pagamento enviado, falta o organizador confirmar"}</span><button class="btn lg ghost narrow" data-act="leave" data-list="${l.id}" data-id="${mine.entry.id}" data-confirm="Sair?">Sair</button>`;
+  bar.querySelector(".bar-in").innerHTML = h;
+  bar.hidden = false; document.body.classList.add("has-bar");
+}
+
+// ---------- admin ----------
+function viewAdmin() {
+  const pending = members.filter((m) => m.status === "pending");
+  const tabs = `<div class="seg three" role="tablist">
+    <button class="${adminTab === "lists" ? "on" : ""}" data-act="adminTab" data-tab="lists">Listas</button>
+    <button class="${adminTab === "requests" ? "on" : ""}" data-act="adminTab" data-tab="requests">Pedidos${pending.length ? ` <span class="badge">${pending.length}</span>` : ""}</button>
+    <button class="${adminTab === "people" ? "on" : ""}" data-act="adminTab" data-tab="people">Pessoas</button>
+  </div>`;
+  let body = "";
+  if (adminTab === "lists") {
+    const sorted = [...lists].sort((a, b) => (a.game_date < b.game_date ? 1 : -1));
+    body = `<button class="btn lg" data-act="newList">+ Nova lista</button>
+    ${sorted.length ? `<div class="games">${sorted.map((l) => {
+      const { main, spots } = ordered(l);
+      return `<div class="game static">
+        ${dateBadge(l)}
+        <span class="game-body"><b>${esc(l.title)}</b>
+          <span class="small muted">${hour(l.start_time)}–${hour(l.end_time)} · ${main.length}/${spots} · ${l.opens_at ? "abre " + esc(fmtOpen(l.opens_at)) : "aberta"}</span>
+          <span class="mini-acts">
+            <a class="btn sm ghost" href="#l-${l.id}">Ver</a>
+            <button class="btn sm ghost" data-act="editList" data-id="${l.id}">Editar</button>
+            <button class="btn sm ghost" data-act="repeatList" data-id="${l.id}">Repetir +7 dias</button>
+            <button class="btn sm ghost danger-txt" data-act="deleteList" data-id="${l.id}" data-confirm="Apagar mesmo?">Apagar</button>
+          </span>
+        </span></div>`;
+    }).join("")}</div>` : `<p class="muted center">Nenhuma lista ainda.</p>`}`;
+  } else if (adminTab === "requests") {
+    body = pending.length ? `<ol class="rows card flush">${pending.map((m) => `<li><div class="rowbtn plain">
+        <span class="who"><b>${esc(m.name)}</b><small>pediu ${new Date(m.created_at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></span>
+        <span class="mini-acts"><button class="btn sm" data-act="setStatus" data-id="${m.id}" data-status="approved">Aprovar</button>
+        <button class="btn sm ghost" data-act="setStatus" data-id="${m.id}" data-status="rejected" data-confirm="Recusar?">Recusar</button></span>
+      </div></li>`).join("")}</ol>` : `<div class="empty card"><h2 class="h2">Nenhum pedido novo</h2><p class="muted">Quando alguém criar conta, aparece aqui para você aprovar.</p></div>`;
+  } else {
+    const people = members.filter((m) => m.status !== "pending").sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+    body = `<ol class="rows card flush">${people.map((m) => `<li><div class="rowbtn plain">
+        <span class="who"><b>${esc(m.name)}</b>${m.is_admin ? ` <span class="pill confirmed">admin</span>` : ""}${m.status === "rejected" ? ` <span class="pill no">bloqueado</span>` : ""}</span>
+        <span class="mini-acts">${m.id === uid() ? `<span class="small muted">você</span>` : `
+          ${m.status === "approved"
+            ? `<button class="btn sm ghost" data-act="setAdmin" data-id="${m.id}" data-val="${m.is_admin ? "0" : "1"}" ${m.is_admin ? 'data-confirm="Tirar admin?"' : ""}>${m.is_admin ? "Tirar admin" : "Tornar admin"}</button>
+               <button class="btn sm ghost danger-txt" data-act="setStatus" data-id="${m.id}" data-status="rejected" data-confirm="Bloquear?">Bloquear</button>`
+            : `<button class="btn sm" data-act="setStatus" data-id="${m.id}" data-status="approved">Aprovar</button>`}`}
+        </span></div></li>`).join("")}</ol>`;
   }
-  const acts = document.createElement("span"); acts.className = "acts";
-  if (inMain) {
-    const p = document.createElement("span"); p.className = "pill " + (e.paid || "no"); p.textContent = PAID_LABEL[e.paid || "no"]; acts.appendChild(p);
-  }
-  if (inMain && mineRow && (e.paid || "no") === "no") acts.appendChild(btn("Já paguei", "sm yellow", () => store.updateEntry(config.weekId, e.id, { paid: "informed" }).then(() => toast("Avisado! O organizador vai confirmar."), showError)));
-  if (inMain && isAdmin && e.paid !== "confirmed") acts.appendChild(btn("Confirmar", "sm", () => store.updateEntry(config.weekId, e.id, { paid: "confirmed" }).catch(showError)));
-  if (inMain && isAdmin && e.paid === "confirmed") acts.appendChild(btn("Desfazer", "sm ghost", () => store.updateEntry(config.weekId, e.id, { paid: "no" }).catch(showError)));
-  if (mineRow || isAdmin) acts.appendChild(confirmBtn(mineRow ? "Sair" : "Remover", () => store.deleteEntry(config.weekId, e.id).then(() => toast(e.name + " saiu da lista."), showError)));
-  li.append(num, who, acts);
-  return li;
+  return `<section class="intro"><span class="eyebrow">Área do organizador</span><h1 class="title">Organizar</h1></section>${tabs}${body}`;
 }
 
-function btn(label, cls, fn) {
-  const b = document.createElement("button"); b.type = "button"; b.className = "btn " + cls; b.textContent = label;
-  b.addEventListener("click", fn); return b;
-}
-// Botão de duas etapas (o navegador do artifact/WhatsApp pode bloquear confirm())
-function confirmBtn(label, fn) {
-  const b = btn(label, "sm ghost", () => {
-    if (b.dataset.armed) { fn(); return; }
-    b.dataset.armed = "1"; b.textContent = "Certeza?"; b.className = "btn sm danger";
-    setTimeout(() => { delete b.dataset.armed; b.textContent = label; b.className = "btn sm ghost"; }, 3000);
-  });
-  return b;
+function listFormHtml(l) {
+  const base = l || lists[lists.length - 1] || {};
+  const date = l ? l.game_date : isoDate(nextSunday());
+  return `<h2 class="h2">${l ? "Editar lista" : "Nova lista"}</h2>
+  <form data-form="list" data-id="${l ? l.id : ""}" class="grid2">
+    <label class="field full">Nome<input id="fTitle" type="text" maxlength="60" value="${esc(base.title || "Racha Criativo")}" required></label>
+    <label class="field">Data do jogo<input id="fDate" type="date" value="${date}" required></label>
+    <label class="field">Vagas<input id="fSpots" type="number" inputmode="numeric" min="1" max="100" value="${base.spots || 18}" required></label>
+    <label class="field">Início<input id="fStart" type="time" value="${base.start_time || "16:00"}"></label>
+    <label class="field">Fim<input id="fEnd" type="time" value="${base.end_time || "19:00"}"></label>
+    <label class="field full">A lista abre em<input id="fOpens" type="datetime-local" value="${l && l.opens_at ? toLocalInput(l.opens_at) : ""}"><small>Vazio = já abre na hora. Antes disso ninguém consegue entrar.</small></label>
+    <label class="field">Valor (R$)<input id="fPrice" type="number" inputmode="decimal" min="0" step="0.5" value="${base.price ?? 10}"></label>
+    <label class="field">Recebedor<input id="fPixName" type="text" maxlength="40" value="${esc(base.pix_name || "")}"></label>
+    <label class="field full">Chave Pix<input id="fPix" type="text" maxlength="80" value="${esc(base.pix_key || "")}" autocapitalize="none"></label>
+    <button class="btn lg full" type="submit">${l ? "Salvar" : "Criar lista"}</button>
+  </form>`;
 }
 
-// ---------- texto do WhatsApp ----------
-function whatsappText() {
-  const { main, wait, spots } = ordered();
-  const lines = [String(config.title || "Racha Criativo").toUpperCase(), fmtDay(config.date), `${fmtHour(config.start)}-${fmtHour(config.end)}`, ""];
-  for (let i = 0; i < spots; i++) {
-    const e = main[i];
-    lines.push(e ? `${i + 1}. ${e.name}${e.type === "convidado" ? ` (conv. ${e.invitedBy})` : ""}${e.paid === "confirmed" ? " ✅" : ""}` : `${i + 1}. `);
-  }
-  lines.push("", "espera:");
-  wait.forEach((e, i) => lines.push(`${i + 1}. ${e.name}${e.type === "convidado" ? ` (conv. ${e.invitedBy})` : ""}`));
-  lines.push("", "Entre pelo site: " + location.href.split("#")[0]);
-  return lines.join("\n");
+// ---------- folhas (bottom sheet) ----------
+function openSheet(html) {
+  $("#sheetBody").innerHTML = html; $("#sheet").hidden = false; document.body.classList.add("locked");
+  const f = $("#sheetBody").querySelector("input:not([type=hidden])"); if (f && window.matchMedia("(pointer:fine)").matches) f.focus();
 }
-async function copy(text, okMsg) {
-  try { await navigator.clipboard.writeText(text); toast(okMsg); }
+function closeSheet() { $("#sheet").hidden = true; document.body.classList.remove("locked"); }
+
+function pixSheet(l) {
+  const mine = myPlace(l);
+  return `<h2 class="h2">Pagamento</h2>
+  <div class="pix">
+    <div><span class="small muted">Valor por pessoa</span><div class="price">${money(l.price)}</div></div>
+    ${l.pix_name ? `<div class="small muted">Para: <b>${esc(l.pix_name)}</b></div>` : ""}
+    <div class="pixkey"><code>${esc(l.pix_key || "O organizador ainda não cadastrou a chave")}</code></div>
+    ${l.pix_key ? `<button class="btn lg ghost" data-act="copyPix" data-list="${l.id}">Copiar chave Pix</button>` : ""}
+    ${mine && mine.where === "main" && (mine.entry.paid || "no") === "no" ? `<button class="btn lg yellow" data-act="paid" data-list="${l.id}" data-id="${mine.entry.id}">Já paguei</button>
+    <p class="small muted center">Depois de pagar, toque em <b>Já paguei</b>. O organizador confirma.</p>` : ""}
+  </div>`;
+}
+
+function rowSheet(l, e) {
+  const mineRow = e.user_id === uid();
+  const { main } = ordered(l);
+  const inMain = main.some((x) => x.id === e.id);
+  const acts = [];
+  if (mineRow && e.kind === "membro" && inMain && (e.paid || "no") === "no") {
+    acts.push(`<button class="btn lg yellow" data-act="paid" data-list="${l.id}" data-id="${e.id}">Já paguei</button>`);
+    acts.push(`<button class="btn lg ghost" data-act="pix" data-list="${l.id}">Ver chave Pix</button>`);
+  }
+  if (me.is_admin && inMain) {
+    acts.push(e.paid === "confirmed"
+      ? `<button class="btn lg ghost" data-act="setPaid" data-list="${l.id}" data-id="${e.id}" data-val="no">Marcar como não pago</button>`
+      : `<button class="btn lg" data-act="setPaid" data-list="${l.id}" data-id="${e.id}" data-val="confirmed">Confirmar pagamento</button>`);
+  }
+  const label = mineRow ? (e.kind === "convidado" ? "Tirar convidado" : "Sair da lista") : "Remover da lista";
+  acts.push(`<button class="btn lg ghost danger-txt" data-act="leave" data-list="${l.id}" data-id="${e.id}" data-confirm="Toque de novo para confirmar">${label}</button>`);
+  return `<h2 class="h2">${esc(e.name)}</h2>
+  <p class="small muted">${e.kind === "convidado" ? "Convidado de " + esc(e.invited_by) + " · " : ""}entrou às ${new Date(e.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p>
+  <div class="stack">${acts.join("")}</div>`;
+}
+
+const guestSheet = (l) => `<h2 class="h2">Levar convidado</h2>
+  <p class="small muted">Convidados ficam depois de todos os membros. Se a lista encher, eles vão para a espera.</p>
+  <form data-form="guest" data-list="${l.id}" class="stack">
+    <label class="field">Nome do convidado<input id="gName" type="text" maxlength="40" required></label>
+    <button class="btn lg" type="submit">Adicionar</button>
+  </form>`;
+
+function accountSheet() {
+  const user = session.user.email.endsWith("@" + EMAIL_DOMAIN) ? session.user.email.split("@")[0] : session.user.email;
+  return `<h2 class="h2">${esc(me ? me.name : "Sua conta")}</h2>
+  <p class="small muted">Usuário: ${esc(user)}${me && me.is_admin ? " · organizador" : ""}</p>
+  <div class="stack"><button class="btn lg ghost" data-act="logout">Sair da conta</button></div>`;
+}
+
+// ---------- WhatsApp ----------
+function whatsappText(l) {
+  const { main, wait, spots } = ordered(l), d = parseDate(l.game_date);
+  const tag = (e) => (e.kind === "convidado" ? ` (conv. ${e.invited_by})` : "");
+  const out = [l.title.toUpperCase(), `${WD[d.getDay()]} (${pad(d.getDate())}/${pad(d.getMonth() + 1)})`, `${hour(l.start_time)}-${hour(l.end_time)}`, ""];
+  for (let i = 0; i < spots; i++) { const e = main[i]; out.push(e ? `${i + 1}. ${e.name}${tag(e)}${e.paid === "confirmed" ? " ✅" : ""}` : `${i + 1}. `); }
+  out.push("", "espera:");
+  wait.forEach((e, i) => out.push(`${i + 1}. ${e.name}${tag(e)}`));
+  out.push("", "Entre pelo site: " + location.origin + location.pathname + "#l-" + l.id);
+  return out.join("\n");
+}
+async function copy(text, ok) {
+  try { await navigator.clipboard.writeText(text); toast(ok); }
   catch {
-    const ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
-    try { document.execCommand("copy"); toast(okMsg); } catch { toast("Não consegui copiar. Selecione e copie manualmente."); }
+    const ta = document.createElement("textarea"); ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); toast(ok); } catch { toast("Não consegui copiar."); }
     ta.remove();
   }
 }
 
 // ---------- ações ----------
-function cleanName(s) { return s.replace(/\s+/g, " ").trim().slice(0, 40); }
-
-$("#accessForm").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const name = cleanName($("#accessName").value);
-  if (!name) return;
-  try { await store.requestAccess(name); toast("Pedido enviado!"); }
-  catch (e) { showError(e); }
-});
-
-$("#joinForm").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  if (!approved()) return toast("Você ainda não foi aprovado.");
-  const name = me.name;
-  if (!isOpen()) return toast("A lista ainda não abriu.");
-  if (list.some((e) => e.uid === store.uid && e.type !== "convidado")) return toast("Você já está na lista.");
-  $("#joinBtn").disabled = true;
-  try { await store.addEntry(config.weekId, { name, type: "membro", uid: store.uid, paid: "no" }); toast("Você entrou!"); }
-  catch (e) { showError(e); $("#joinBtn").disabled = false; }
-});
-
-$("#guestForm").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  const name = cleanName($("#guestName").value);
-  const me = list.find((e) => e.uid === store.uid && e.type !== "convidado");
-  if (!name || !me) return toast("Entre na lista antes de levar convidado.");
-  if (list.some((e) => e.name.toLowerCase() === name.toLowerCase())) return toast(`Já tem um "${name}" na lista.`);
-  try { await store.addEntry(config.weekId, { name, type: "convidado", invitedBy: me.name, uid: store.uid, paid: "no" }); $("#guestName").value = ""; toast("Convidado adicionado."); }
-  catch (e) { showError(e); }
-});
-
-$("#copyPix").addEventListener("click", () => copy(config.pixKey, "Chave Pix copiada."));
-$("#copyList").addEventListener("click", () => copy(whatsappText(), "Lista copiada. Cole no grupo!"));
-
-$("#adminOpen").addEventListener("click", () => { $("#pinForm").hidden = !$("#pinForm").hidden; $("#pin").focus(); });
-$("#pinForm").addEventListener("submit", async (ev) => {
-  ev.preventDefault();
-  try { await store.adminLogin($("#pin").value.trim()); isAdmin = true; LS.set("volei-admin", true); $("#pinForm").hidden = true; $("#pin").value = ""; fillCfgForm(); startMembers(); render(); toast("Modo organizador ligado."); }
-  catch (e) { toast(e.message); }
-});
-$("#adminLogout").addEventListener("click", () => { isAdmin = false; LS.del("volei-admin"); stopMembers(); render(); });
-
-function fillCfgForm() {
-  if (!config) return;
-  $("#cTitle").value = config.title || ""; $("#cDate").value = config.date; $("#cSpots").value = config.spots;
-  $("#cStart").value = config.start || ""; $("#cEnd").value = config.end || "";
-  $("#cOpens").value = config.opensAtMs ? toLocalInput(config.opensAtMs) : "";
-  $("#cPrice").value = config.price ?? ""; $("#cPixName").value = config.pixName || ""; $("#cPix").value = config.pixKey || "";
+const findList = (id) => lists.find((x) => x.id === id);
+const findEntry = (lid, id) => (entries[lid] || []).find((x) => x.id === id);
+async function run(promise, okMsg) {
+  const r = await promise;
+  if (r && r.error) { toast(errMsg(r.error)); return false; }
+  if (okMsg) toast(okMsg);
+  scheduleRefresh();
+  return true;
 }
-function readCfgForm() {
-  const opens = $("#cOpens").value;
-  const date = $("#cDate").value;
-  return {
-    title: cleanName($("#cTitle").value) || "Racha Criativo", date, weekId: date,
-    spots: Math.max(1, Number($("#cSpots").value) || 18), start: $("#cStart").value, end: $("#cEnd").value,
-    opensAtMs: opens ? new Date(opens).getTime() : 0, price: Number($("#cPrice").value) || 0,
-    pixName: $("#cPixName").value.trim(), pixKey: $("#cPix").value.trim(),
-  };
-}
-$("#cfgForm").addEventListener("submit", (ev) => {
+
+const actions = {
+  authTab: (d) => { authTab = d.tab; render(); },
+  adminTab: (d) => { adminTab = d.tab; render(); },
+  logout: async () => { closeSheet(); await sb.auth.signOut(); location.hash = ""; },
+  join: (d) => run(sb.rpc("join_list", { p_list: d.list }), "Você entrou!"),
+  leave: async (d) => { const e = findEntry(d.list, d.id); if (await run(sb.from("entries").delete().eq("id", d.id), (e ? e.name : "") + " saiu da lista.")) closeSheet(); },
+  paid: async (d) => { if (await run(sb.rpc("mark_paid", { p_entry: d.id }), "Avisado! O organizador vai confirmar.")) closeSheet(); },
+  setPaid: async (d) => { if (await run(sb.from("entries").update({ paid: d.val }).eq("id", d.id), d.val === "confirmed" ? "Pagamento confirmado." : "Marcado como não pago.")) closeSheet(); },
+  pix: (d) => { const l = findList(d.list); if (l) openSheet(pixSheet(l)); },
+  copyPix: (d) => { const l = findList(d.list); if (l) copy(l.pix_key, "Chave Pix copiada."); },
+  copy: (d) => { const l = findList(d.list); if (l) copy(whatsappText(l), "Lista copiada. Cole no grupo!"); },
+  guest: (d) => { const l = findList(d.list); if (l) openSheet(guestSheet(l)); },
+  row: (d) => { const l = findList(d.list), e = findEntry(d.list, d.id); if (l && e) openSheet(rowSheet(l, e)); },
+  me: () => openSheet(accountSheet()),
+  newList: () => openSheet(listFormHtml(null)),
+  editList: (d) => { const l = findList(d.id); if (l) openSheet(listFormHtml(l)); },
+  repeatList: (d) => {
+    const l = findList(d.id); if (!l) return;
+    const copyRow = { title: l.title, game_date: isoDate(addDays(parseDate(l.game_date), 7)), start_time: l.start_time, end_time: l.end_time, spots: l.spots, price: l.price, pix_key: l.pix_key, pix_name: l.pix_name, opens_at: l.opens_at ? new Date(new Date(l.opens_at).getTime() + 7 * 864e5).toISOString() : null };
+    run(sb.from("lists").insert(copyRow), "Lista criada para " + pad(parseDate(copyRow.game_date).getDate()) + "/" + pad(parseDate(copyRow.game_date).getMonth() + 1) + ".");
+  },
+  deleteList: (d) => run(sb.from("lists").delete().eq("id", d.id), "Lista apagada."),
+  setStatus: (d) => run(sb.from("profiles").update({ status: d.status }).eq("id", d.id), d.status === "approved" ? "Aprovado." : "Bloqueado."),
+  setAdmin: (d) => run(sb.from("profiles").update({ is_admin: d.val === "1" }).eq("id", d.id), d.val === "1" ? "Agora é admin." : "Não é mais admin."),
+};
+
+const forms = {
+  async login(f) {
+    const email = userToEmail($("#lUser").value), password = $("#lPass").value;
+    const { error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) toast(errMsg(error));
+  },
+  async signup(f) {
+    const name = clean($("#sName").value), user = $("#sUser").value.trim(), password = $("#sPass").value;
+    if (!/^[a-zA-Z0-9._-]{3,24}$/.test(user)) return toast("Usuário: de 3 a 24 caracteres, só letras, números, ponto e traço.");
+    if (password.length < 6) return toast("A senha precisa ter pelo menos 6 caracteres.");
+    const { data, error } = await sb.auth.signUp({ email: userToEmail(user), password, options: { data: { name } } });
+    if (error) return toast(errMsg(error));
+    if (!data.session) toast("Conta criada, mas o Supabase pediu confirmação de e-mail. Avise o organizador para desligar isso.");
+  },
+  async guest(f) {
+    const name = clean($("#gName").value);
+    if (await run(sb.rpc("add_guest", { p_list: f.dataset.list, p_name: name }), "Convidado adicionado.")) closeSheet();
+  },
+  async list(f) {
+    const opens = $("#fOpens").value;
+    const row = {
+      title: clean($("#fTitle").value) || "Racha Criativo", game_date: $("#fDate").value,
+      spots: Math.max(1, Number($("#fSpots").value) || 18), start_time: $("#fStart").value || "16:00", end_time: $("#fEnd").value || "19:00",
+      opens_at: opens ? new Date(opens).toISOString() : null, price: Number($("#fPrice").value) || 0,
+      pix_name: $("#fPixName").value.trim(), pix_key: $("#fPix").value.trim(),
+    };
+    const id = f.dataset.id;
+    const ok = await run(id ? sb.from("lists").update(row).eq("id", id) : sb.from("lists").insert(row), id ? "Lista salva." : "Lista criada.");
+    if (ok) closeSheet();
+  },
+};
+
+document.addEventListener("click", async (ev) => {
+  const t = ev.target.closest("[data-act], [data-close]");
+  if (!t) return;
+  if (t.hasAttribute("data-close")) return closeSheet();
+  const d = t.dataset;
+  if (d.confirm && !d.armed) {
+    d.armed = "1"; d.orig = t.innerHTML; t.textContent = d.confirm; t.classList.add("armed");
+    setTimeout(() => { if (t.isConnected) { delete t.dataset.armed; t.innerHTML = d.orig; t.classList.remove("armed"); } }, 3000);
+    return;
+  }
+  const fn = actions[d.act]; if (!fn) return;
+  if (t.tagName === "BUTTON") t.disabled = true;
+  try { await fn(d, t); } finally { if (t.isConnected && t.tagName === "BUTTON") t.disabled = false; }
+});
+document.addEventListener("submit", async (ev) => {
+  const f = ev.target; if (!f.dataset.form) return;
   ev.preventDefault();
-  store.setConfig(readCfgForm()).then(() => toast("Salvo."), (e) => toast(e.code === "permission-denied" ? "Sem permissão: entre de novo com o PIN." : e.message));
+  const b = f.querySelector("button[type=submit]"); if (b) b.disabled = true;
+  try { await forms[f.dataset.form](f); } catch (e) { toast(errMsg(e)); } finally { if (b && b.isConnected) b.disabled = false; }
 });
-$("#nextWeek").addEventListener("click", () => {
-  const next = nextSunday(parseDate(config.date));
-  $("#cDate").value = isoDate(next);
-  toast("Data trocada para " + fmtDay(isoDate(next)) + ". Ajuste a abertura e toque em Salvar.");
-});
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("#sheet").hidden) closeSheet(); });
+window.addEventListener("hashchange", () => { route = parseRoute(); closeSheet(); render(); window.scrollTo(0, 0); });
+$("#backBtn").addEventListener("click", () => { location.hash = ""; });
+$("#meBtn").addEventListener("click", () => actions.me());
+
+function toast(msg) {
+  const t = $("#toast"); t.textContent = msg; t.classList.add("show");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove("show"), 3200);
+}
+
+// contagem regressiva: atualiza só os números; quando zera, redesenha
+let needsRedraw = false;
+function tick() {
+  document.querySelectorAll("[data-cd]").forEach((el) => {
+    const left = new Date(el.dataset.cd).getTime() - Date.now();
+    el.textContent = countdown(left);
+    if (left <= 0) needsRedraw = true;
+  });
+}
+setInterval(() => { tick(); if (needsRedraw) { needsRedraw = false; render(); } }, 1000);
 
 // ---------- início ----------
-function subscribeWeek() {
-  if (unsubEntries) unsubEntries();
-  list = [];
-  unsubEntries = store.onEntries(config.weekId, (items) => { list = items; render(); });
-}
-
 (async function start() {
-  try {
-    store = CONF.firebase ? await firebaseStore(CONF.firebase) : localStore();
-  } catch (e) {
-    showError(e); $("#when").textContent = "Não consegui conectar. Recarregue a página."; return;
-  }
-  $("#demoBanner").hidden = store.mode !== "demo";
-  store.onMyMember((m) => { me = m; meLoaded = true; render(); });
-  if (isAdmin) startMembers();
-  let currentWeek = null;
-  store.onConfig((c) => {
-    if (!c) {
-      config = defaultConfig();
-      if (store.mode === "demo") store.setConfig(config);
-    } else config = { ...defaultConfig(), ...c };
-    if (config.weekId !== currentWeek) { currentWeek = config.weekId; subscribeWeek(); }
-    if (isAdmin) fillCfgForm();
-    render();
+  if (!configured) { session = undefined; render(); return; }
+  session = undefined; $("#app").innerHTML = viewLoading();
+  const { data } = await sb.auth.getSession();
+  session = data.session || null;
+  sb.auth.onAuthStateChange((_ev, s) => {
+    const changed = (s && s.user.id) !== (session && session.user.id);
+    session = s || null;
+    if (!session) { me = null; meLoaded = false; lists = []; entries = {}; members = []; listsLoaded = false; stopRealtime(); render(); return; }
+    if (changed) { meLoaded = false; render(); setTimeout(refresh, 0); startRealtime(); }
   });
-  setInterval(() => { if (config && config.opensAtMs && !isOpen() || (config && config.opensAtMs && Date.now() - config.opensAtMs < 2000)) render(); }, 1000);
+  if (session) { startRealtime(); refresh(); } else render();
+  setInterval(() => { if (session && document.visibilityState === "visible") refresh(); }, 20000);
+  document.addEventListener("visibilitychange", () => { if (session && document.visibilityState === "visible") refresh(); });
 })();
