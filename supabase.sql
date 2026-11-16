@@ -235,3 +235,16 @@ begin
   end;
   return e;
 end $$;
+
+-- =====================================================================
+-- Parte 4: tier dos jogadores (1 iniciante, 2 meia bomba, 3 os melhores).
+-- Só organizadores leem e escrevem. key = 'u:<id da pessoa>' ou 'e:<id da inscrição>' (convidado/avulso).
+-- =====================================================================
+create table if not exists public.tiers (
+  key text primary key,
+  tier int not null check (tier between 1 and 3),
+  updated_at timestamptz not null default now()
+);
+alter table public.tiers enable row level security;
+drop policy if exists "tier: so admin" on public.tiers;
+create policy "tier: so admin" on public.tiers for all to authenticated using (public.is_admin()) with check (public.is_admin());

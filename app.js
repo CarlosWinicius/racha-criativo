@@ -47,6 +47,7 @@ function errMsg(e) {
 // ---------- estado ----------
 let session = null, me = null, meLoaded = false;
 let lists = [], listsLoaded = false, entries = {}, members = [];
+let tiers = {}; // só para admins: { "u:<pessoa>": 1..3, "e:<inscrição>": 1..3 }
 let route = parseRoute(), authTab = "login", adminTab = "lists";
 let channel = null;
 
@@ -84,6 +85,8 @@ async function refresh() {
     if (me && me.is_admin) {
       const m = await sb.from("profiles").select("*").order("created_at");
       if (!m.error) members = m.data || [];
+      const t = await sb.from("tiers").select("key,tier");
+      if (!t.error) tiers = Object.fromEntries((t.data || []).map((x) => [x.key, x.tier]));
     }
   } catch (e) { toast(errMsg(e)); }
   render();
@@ -361,7 +364,8 @@ function viewAdmin() {
   } else {
     const people = members.filter((m) => m.status !== "pending").sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
     body = `<ol class="rows card flush">${people.map((m) => `<li><div class="rowbtn plain">
-        <span class="who"><b>${esc(m.name)}</b>${m.is_admin ? ` <span class="pill confirmed">admin</span>` : ""}${m.status === "rejected" ? ` <span class="pill no">bloqueado</span>` : ""}</span>
+        <span class="who"><b>${esc(m.name)}</b>${m.is_admin ? ` <span class="pill confirmed">admin</span>` : ""}${m.status === "rejected" ? ` <span class="pill no">bloqueado</span>` : ""}
+          ${m.status === "approved" ? tierPicker("u:" + m.id) : ""}</span>
         <span class="mini-acts">${m.id === uid() ? `<span class="small muted">você</span>` : `
           ${m.status === "approved"
             ? `<button class="btn sm ghost" data-act="setAdmin" data-id="${m.id}" data-val="${m.is_admin ? "0" : "1"}" ${m.is_admin ? 'data-confirm="Tirar admin?"' : ""}>${m.is_admin ? "Tirar admin" : "Tornar admin"}</button>
@@ -396,7 +400,7 @@ function openSheet(html) {
   $("#sheetBody").innerHTML = html; $("#sheet").hidden = false; document.body.classList.add("locked");
   const f = $("#sheetBody").querySelector("input:not([type=hidden])"); if (f && window.matchMedia("(pointer:fine)").matches) f.focus();
 }
-function closeSheet() { $("#sheet").hidden = true; document.body.classList.remove("locked"); }
+function closeSheet() { openTeamsList = null; $("#sheet").hidden = true; document.body.classList.remove("locked"); }
 
 function pixSheet(l) {
   const mine = myPlace(l);
@@ -473,14 +477,37 @@ function shuffle(arr) {
   }
   return a;
 }
-// Um levantador por time (sorteado entre os marcados); o resto é distribuído um a um.
-function drawTeams(main, n) {
+// ---------- tiers (só admin) ----------
+let openTeamsList = null; // lista cuja folha de sorteio está aberta
+function refreshTierUI() {
+  const l = !$("#sheet").hidden && openTeamsList && findList(openTeamsList);
+  if (l) $("#sheetBody").innerHTML = teamsSheet(l); else render();
+}
+const TIER_NAMES = { 1: "Iniciante", 2: "Meia bomba", 3: "Os melhores" };
+const tierKey = (e) => (e.kind === "membro" ? "u:" + e.user_id : "e:" + e.id);
+const tierOf = (e) => tiers[tierKey(e)] || 2; // sem classificação conta como meia bomba
+function tierPicker(key) {
+  const cur = tiers[key];
+  return `<span class="tierpick" role="group" aria-label="Tier">${[1, 2, 3].map((t) =>
+    `<button type="button" class="${cur === t ? "on t" + t : ""}" data-act="setTier" data-key="${key}" data-tier="${t}" title="${TIER_NAMES[t]}" aria-pressed="${cur === t}">${t}</button>`).join("")}</span>`;
+}
+
+// Um levantador por time (sorteado entre os marcados). O resto vai do melhor para o
+// iniciante, cada um para o time mais fraco no momento (empate = sorteio).
+function drawTeams(main, n, tierFn = () => 2) {
   const setters = shuffle(main.filter((e) => e.is_setter));
   if (setters.length < n) throw new Error(`Marque pelo menos ${n} levantadores (marcados: ${setters.length}).`);
-  const teams = setters.slice(0, n).map((s) => ({ setter: s.id, players: [] }));
+  const teams = setters.slice(0, n).map((s) => ({ setter: s.id, players: [], sum: tierFn(s) }));
   const used = new Set(teams.map((t) => t.setter));
-  shuffle(main.filter((e) => !used.has(e.id))).forEach((e, i) => teams[i % n].players.push(e.id));
-  return teams;
+  const cap = Math.ceil(main.length / n);
+  const rest = shuffle(main.filter((e) => !used.has(e.id))).sort((a, b) => tierFn(b) - tierFn(a));
+  for (const e of rest) {
+    const open = shuffle(teams.filter((t) => t.players.length + 1 < cap));
+    const pool = open.length ? open : shuffle(teams);
+    const t = pool.reduce((best, x) => (x.sum < best.sum || (x.sum === best.sum && x.players.length < best.players.length) ? x : best));
+    t.players.push(e.id); t.sum += tierFn(e);
+  }
+  return teams.map(({ setter, players }) => ({ setter, players }));
 }
 
 function teamsSection(l) {
@@ -496,7 +523,8 @@ function teamsSection(l) {
       const e = byId[id];
       return `<li>${e ? esc(e.name) : `<i class="muted">saiu da lista</i>`}${j === 0 ? ` <span class="lev">LEV</span>` : ""}</li>`;
     }).join("");
-    return `<div class="team ${st.cls}"><h3>${st.name}</h3><ol>${people}</ol></div>`;
+    const strength = me.is_admin ? [t.setter, ...t.players].reduce((s, id) => s + (byId[id] ? tierOf(byId[id]) : 0), 0) : 0;
+    return `<div class="team ${st.cls}"><h3>${st.name}${me.is_admin ? `<small>força ${strength}</small>` : ""}</h3><ol>${people}</ol></div>`;
   }).join("");
   return `<section class="card">
     <h2 class="h2">Times do dia <small>${when ? "sorteado " + when : ""}</small></h2>
@@ -516,9 +544,16 @@ function teamsSheet(l) {
   const ready = full && marked >= n;
   const why = !full ? `A lista precisa estar completa para sortear (${main.length}/${spots}).`
     : marked < n ? `Marque pelo menos ${n} levantadores. Faltam ${n - marked}.` : `Pronto! ${n} times de ${Math.floor(main.length / n)}, um levantador em cada.`;
+  const unrated = main.filter((e) => !tiers[tierKey(e)]).length;
   return `<h2 class="h2">Sortear times</h2>
-  <p class="small muted">Toque em quem é <b>levantador</b>. O site lembra para as próximas semanas.</p>
-  <div class="setters">${main.map((e) => `<button type="button" class="pick ${e.is_setter ? "on" : ""}" data-act="toggleSetter" data-list="${l.id}" data-id="${e.id}" aria-pressed="${e.is_setter ? "true" : "false"}">${esc(e.name)}</button>`).join("")}</div>
+  <p class="small muted">Marque os <b>levantadores</b> (LEV) e o <b>tier</b> de cada um: <b>1</b> iniciante, <b>2</b> meia bomba, <b>3</b> os melhores. Só organizadores veem o tier. O site lembra tudo para as próximas semanas.</p>
+  <ol class="rows card flush">${main.map((e) => `<li><div class="rowbtn plain prow">
+    <span class="who"><b>${esc(e.name)}</b>${e.kind !== "membro" ? `<small>${e.kind === "convidado" ? "convidado" : "avulso"}</small>` : ""}</span>
+    <span class="mini-acts">
+      <button type="button" class="pick ${e.is_setter ? "on" : ""}" data-act="toggleSetter" data-list="${l.id}" data-id="${e.id}" aria-pressed="${e.is_setter ? "true" : "false"}">LEV</button>
+      ${tierPicker(tierKey(e))}
+    </span></div></li>`).join("")}</ol>
+  ${unrated ? `<p class="small muted">${unrated} sem tier. Quem não tem tier conta como 2 (meia bomba).</p>` : ""}
   <div class="notice ${ready ? "ok" : "warn"}">Levantadores: <b>${marked}</b> de ${n}. ${why}</div>
   <button class="btn lg yellow" data-act="draw" data-list="${l.id}" ${ready ? "" : "disabled"}>${Array.isArray(l.teams) && l.teams.length ? "Sortear de novo" : "Sortear times"}</button>
   ${Array.isArray(l.teams) && l.teams.length ? `<button class="btn lg ghost danger-txt" data-act="clearTeams" data-list="${l.id}" data-confirm="Apagar os times?">Apagar times</button>` : ""}`;
@@ -630,7 +665,13 @@ const actions = {
   copyPix: (d) => { const l = findList(d.list); if (l) copy(l.pix_key, "Chave Pix copiada."); },
   copyPixCode: (d) => { const l = findList(d.list); if (l) copy(pixCode(l), "Pix copia e cola copiado. Cole no app do banco."); },
   addPerson: (d) => { const l = findList(d.list); if (l) openSheet(addPersonSheet(l)); },
-  teams: (d) => { const l = findList(d.list); if (l) openSheet(teamsSheet(l)); },
+  teams: (d) => { const l = findList(d.list); if (l) { openSheet(teamsSheet(l)); openTeamsList = l.id; } },
+  setTier: async (d) => {
+    const key = d.key, t = Number(d.tier), prev = tiers[key];
+    tiers[key] = t; refreshTierUI();
+    const r = await sb.from("tiers").upsert({ key, tier: t, updated_at: new Date().toISOString() });
+    if (r.error) { if (prev) tiers[key] = prev; else delete tiers[key]; refreshTierUI(); toast(errMsg(r.error)); }
+  },
   toggleSetter: async (d) => {
     const l = findList(d.list), e = findEntry(d.list, d.id); if (!l || !e) return;
     const val = !e.is_setter;
@@ -643,7 +684,7 @@ const actions = {
   draw: async (d) => {
     const l = findList(d.list); if (!l) return;
     let teams;
-    try { teams = drawTeams(ordered(l).main, teamCount(l)); } catch (e) { return toast(e.message); }
+    try { teams = drawTeams(ordered(l).main, teamCount(l), tierOf); } catch (e) { return toast(e.message); }
     if (await run(sb.from("lists").update({ teams, teams_at: new Date().toISOString() }).eq("id", l.id), "Times sorteados!")) {
       l.teams = teams; l.teams_at = new Date().toISOString(); closeSheet(); render();
     }
