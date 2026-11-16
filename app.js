@@ -248,7 +248,7 @@ function rowHtml(l, e, n, inMain) {
   const mineRow = e.user_id === uid();
   const can = mineRow || me.is_admin;
   const inner = `<span class="num">${n}</span>
-    <span class="who"><b>${esc(e.name)}</b>${e.kind === "convidado" ? `<small>convidado de ${esc(e.invited_by)}</small>` : e.kind === "avulso" ? `<small>colocado por ${esc(e.invited_by)}</small>` : ""}</span>
+    <span class="who"><b>${esc(e.name)}${e.is_setter ? ` <span class="lev">LEV</span>` : ""}</b>${e.kind === "convidado" ? `<small>convidado de ${esc(e.invited_by)}</small>` : e.kind === "avulso" ? `<small>colocado por ${esc(e.invited_by)}</small>` : ""}</span>
     ${inMain ? pill(e.paid) : ""}${can ? `<span class="chev" aria-hidden="true">›</span>` : ""}`;
   return `<li class="${mineRow ? "mine" : ""}">${can
     ? `<button class="rowbtn" type="button" data-act="row" data-list="${l.id}" data-id="${e.id}" aria-label="Opções de ${esc(e.name)}">${inner}</button>`
@@ -285,6 +285,7 @@ function viewList(id) {
     <div class="meter light"><i style="width:${Math.min(100, (main.length / spots) * 100)}%"></i></div>
   </section>
   ${notice}
+  ${teamsSection(l)}
   <section class="card flush">
     <h2 class="h2 pad">Lista <small>${main.length >= spots ? "lotada" : spots - main.length + " vagas livres"}</small></h2>
     <ol class="rows">
@@ -298,7 +299,8 @@ function viewList(id) {
   </section>` : ""}
   <div class="tools">
     ${mine && !isPast(l) ? `<button class="btn ghost" data-act="guest" data-list="${l.id}">+ Convidado</button>` : ""}
-    ${me.is_admin ? `<button class="btn ghost" data-act="addPerson" data-list="${l.id}">+ Colocar pessoa</button>` : ""}
+    ${me.is_admin ? `<button class="btn ghost" data-act="addPerson" data-list="${l.id}">+ Colocar pessoa</button>
+    <button class="btn ghost" data-act="teams" data-list="${l.id}">Sortear times</button>` : ""}
     <button class="btn ghost" data-act="pix" data-list="${l.id}">Pix ${money(l.price)}</button>
     <button class="btn ghost" data-act="copy" data-list="${l.id}">Copiar p/ WhatsApp</button>
   </div>`;
@@ -450,6 +452,84 @@ function accountSheet() {
   <button class="btn lg ghost danger-txt" data-act="logout">Sair da conta</button>`;
 }
 
+// ---------- times do dia ----------
+const TEAM_STYLES = [
+  { name: "Time Azul", cls: "t-blue" }, { name: "Time Amarelo", cls: "t-yellow" }, { name: "Time Branco", cls: "t-white" },
+  { name: "Time Verde", cls: "t-green" }, { name: "Time Vermelho", cls: "t-red" },
+];
+const TEAM_SIZE = 6;
+const teamCount = (l) => Math.max(2, Math.floor((Number(l.spots) || 18) / TEAM_SIZE));
+
+function shuffle(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const r = new Uint32Array(1); crypto.getRandomValues(r);
+    const j = r[0] % (i + 1); [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+// Um levantador por time (sorteado entre os marcados); o resto é distribuído um a um.
+function drawTeams(main, n) {
+  const setters = shuffle(main.filter((e) => e.is_setter));
+  if (setters.length < n) throw new Error(`Marque pelo menos ${n} levantadores (marcados: ${setters.length}).`);
+  const teams = setters.slice(0, n).map((s) => ({ setter: s.id, players: [] }));
+  const used = new Set(teams.map((t) => t.setter));
+  shuffle(main.filter((e) => !used.has(e.id))).forEach((e, i) => teams[i % n].players.push(e.id));
+  return teams;
+}
+
+function teamsSection(l) {
+  if (!Array.isArray(l.teams) || !l.teams.length) return "";
+  const byId = Object.fromEntries((entries[l.id] || []).map((e) => [e.id, e]));
+  const mainIds = ordered(l).main.map((e) => e.id);
+  const teamIds = l.teams.flatMap((t) => [t.setter, ...t.players]);
+  const stale = teamIds.some((id) => !mainIds.includes(id)) || mainIds.some((id) => !teamIds.includes(id));
+  const when = l.teams_at ? new Date(l.teams_at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+  const cards = l.teams.map((t, i) => {
+    const st = TEAM_STYLES[i % TEAM_STYLES.length];
+    const people = [t.setter, ...t.players].map((id, j) => {
+      const e = byId[id];
+      return `<li>${e ? esc(e.name) : `<i class="muted">saiu da lista</i>`}${j === 0 ? ` <span class="lev">LEV</span>` : ""}</li>`;
+    }).join("");
+    return `<div class="team ${st.cls}"><h3>${st.name}</h3><ol>${people}</ol></div>`;
+  }).join("");
+  return `<section class="card">
+    <h2 class="h2">Times do dia <small>${when ? "sorteado " + when : ""}</small></h2>
+    ${stale ? `<div class="notice warn">A lista mudou depois do sorteio.${me.is_admin ? " Sorteie de novo." : " Os times podem mudar."}</div>` : ""}
+    <div class="teams">${cards}</div>
+    <div class="tools">
+      <button class="btn ghost" data-act="copyTeams" data-list="${l.id}">Copiar times</button>
+      ${me.is_admin ? `<button class="btn ghost" data-act="teams" data-list="${l.id}">Sortear de novo</button>` : ""}
+    </div>
+  </section>`;
+}
+
+function teamsSheet(l) {
+  const { main, spots } = ordered(l), n = teamCount(l);
+  const marked = main.filter((e) => e.is_setter).length;
+  const full = main.length >= spots;
+  const ready = full && marked >= n;
+  const why = !full ? `A lista precisa estar completa para sortear (${main.length}/${spots}).`
+    : marked < n ? `Marque pelo menos ${n} levantadores. Faltam ${n - marked}.` : `Pronto! ${n} times de ${Math.floor(main.length / n)}, um levantador em cada.`;
+  return `<h2 class="h2">Sortear times</h2>
+  <p class="small muted">Toque em quem é <b>levantador</b>. O site lembra para as próximas semanas.</p>
+  <div class="setters">${main.map((e) => `<button type="button" class="pick ${e.is_setter ? "on" : ""}" data-act="toggleSetter" data-list="${l.id}" data-id="${e.id}" aria-pressed="${e.is_setter ? "true" : "false"}">${esc(e.name)}</button>`).join("")}</div>
+  <div class="notice ${ready ? "ok" : "warn"}">Levantadores: <b>${marked}</b> de ${n}. ${why}</div>
+  <button class="btn lg yellow" data-act="draw" data-list="${l.id}" ${ready ? "" : "disabled"}>${Array.isArray(l.teams) && l.teams.length ? "Sortear de novo" : "Sortear times"}</button>
+  ${Array.isArray(l.teams) && l.teams.length ? `<button class="btn lg ghost danger-txt" data-act="clearTeams" data-list="${l.id}" data-confirm="Apagar os times?">Apagar times</button>` : ""}`;
+}
+
+function teamsText(l) {
+  const byId = Object.fromEntries((entries[l.id] || []).map((e) => [e.id, e]));
+  const d = parseDate(l.game_date);
+  const out = [`TIMES DO DIA · ${l.title.toUpperCase()} (${pad(d.getDate())}/${pad(d.getMonth() + 1)})`];
+  l.teams.forEach((t, i) => {
+    out.push("", TEAM_STYLES[i % TEAM_STYLES.length].name.toUpperCase());
+    [t.setter, ...t.players].forEach((id, j) => out.push(`${j + 1}. ${byId[id] ? byId[id].name : "?"}${j === 0 ? " (levantador)" : ""}`));
+  });
+  return out.join("\n");
+}
+
 const addPersonSheet = (l) => `<h2 class="h2">Colocar pessoa na lista</h2>
   <p class="small muted">Para quem não tem conta ou está sem celular. Entra como membro, na ordem de agora.</p>
   <form data-form="addPerson" data-list="${l.id}" class="stack">
@@ -545,6 +625,26 @@ const actions = {
   copyPix: (d) => { const l = findList(d.list); if (l) copy(l.pix_key, "Chave Pix copiada."); },
   copyPixCode: (d) => { const l = findList(d.list); if (l) copy(pixCode(l), "Pix copia e cola copiado. Cole no app do banco."); },
   addPerson: (d) => { const l = findList(d.list); if (l) openSheet(addPersonSheet(l)); },
+  teams: (d) => { const l = findList(d.list); if (l) openSheet(teamsSheet(l)); },
+  toggleSetter: async (d) => {
+    const l = findList(d.list), e = findEntry(d.list, d.id); if (!l || !e) return;
+    const val = !e.is_setter;
+    e.is_setter = val; $("#sheetBody").innerHTML = teamsSheet(l); // atualiza na hora
+    const r = await sb.from("entries").update({ is_setter: val }).eq("id", e.id);
+    if (r.error) { e.is_setter = !val; $("#sheetBody").innerHTML = teamsSheet(l); return toast(errMsg(r.error)); }
+    if (e.kind === "membro") await sb.from("profiles").update({ is_setter: val }).eq("id", e.user_id); // lembra para a próxima
+    scheduleRefresh();
+  },
+  draw: async (d) => {
+    const l = findList(d.list); if (!l) return;
+    let teams;
+    try { teams = drawTeams(ordered(l).main, teamCount(l)); } catch (e) { return toast(e.message); }
+    if (await run(sb.from("lists").update({ teams, teams_at: new Date().toISOString() }).eq("id", l.id), "Times sorteados!")) {
+      l.teams = teams; l.teams_at = new Date().toISOString(); closeSheet(); render();
+    }
+  },
+  clearTeams: async (d) => { if (await run(sb.from("lists").update({ teams: null, teams_at: null }).eq("id", d.list), "Times apagados.")) closeSheet(); },
+  copyTeams: (d) => { const l = findList(d.list); if (l && l.teams) copy(teamsText(l), "Times copiados. Cole no grupo!"); },
   resetPw: async (d) => {
     const r = await sb.rpc("admin_reset_password", { p_user: d.id });
     if (r.error) return toast(errMsg(r.error));

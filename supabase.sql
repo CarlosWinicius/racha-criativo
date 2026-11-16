@@ -212,3 +212,26 @@ revoke all on function public.admin_add_entry(uuid, text) from public, anon;
 revoke all on function public.admin_reset_password(uuid) from public, anon;
 grant execute on function public.admin_add_entry(uuid, text) to authenticated;
 grant execute on function public.admin_reset_password(uuid) to authenticated;
+
+-- =====================================================================
+-- Parte 3: levantadores e times do dia.
+-- =====================================================================
+alter table public.profiles add column if not exists is_setter boolean not null default false;
+alter table public.entries add column if not exists is_setter boolean not null default false;
+alter table public.lists add column if not exists teams jsonb;
+alter table public.lists add column if not exists teams_at timestamptz;
+
+-- quem já foi marcado como levantador entra na lista já marcado
+create or replace function public.join_list(p_list uuid) returns public.entries
+language plpgsql security definer set search_path = public as $$
+declare p profiles; e entries;
+begin
+  p := _check_can_join(p_list);
+  begin
+    insert into entries (list_id, user_id, name, kind, is_setter)
+    values (p_list, auth.uid(), p.name, 'membro', p.is_setter) returning * into e;
+  exception when unique_violation then
+    raise exception 'Você já está na lista, ou já tem alguém com o nome "%" nela.', p.name;
+  end;
+  return e;
+end $$;
