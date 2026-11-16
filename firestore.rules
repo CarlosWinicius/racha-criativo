@@ -1,0 +1,73 @@
+rules_version = '2';
+// Regras do Firestore para a lista do vôlei.
+// Cole este arquivo em: Firebase Console > Firestore Database > Regras > Publicar.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function secretPin() { return get(/databases/$(database)/documents/secret/admin).data.pin; }
+
+    // Admin = quem gravou o PIN certo em adminSessions/{seu uid}.
+    // Trocar o PIN em secret/admin derruba todos os admins.
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/adminSessions/$(request.auth.uid))
+        && get(/databases/$(database)/documents/adminSessions/$(request.auth.uid)).data.pin == secretPin();
+    }
+    function myMember() { return get(/databases/$(database)/documents/members/$(request.auth.uid)).data; }
+    function isApproved() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/members/$(request.auth.uid))
+        && myMember().status == 'approved';
+    }
+    function cfg() { return get(/databases/$(database)/documents/config/current).data; }
+    function validName(n) { return n is string && n.size() > 0 && n.size() <= 40; }
+
+    // O PIN fica aqui. Ninguém lê nem escreve pelo site.
+    match /secret/{doc} { allow read, write: if false; }
+
+    match /adminSessions/{uid} {
+      allow read: if false;
+      allow create, update: if signedIn() && uid == request.auth.uid
+        && request.resource.data.pin == secretPin();
+      allow delete: if signedIn() && uid == request.auth.uid;
+    }
+
+    match /config/current {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Cadastro: a pessoa pede, o admin aprova.
+    match /members/{uid} {
+      allow get: if signedIn() && (uid == request.auth.uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if signedIn() && uid == request.auth.uid
+        && request.resource.data.uid == uid
+        && request.resource.data.status == 'pending'
+        && validName(request.resource.data.name)
+        && request.resource.data.requestedAt == request.time;
+      allow update, delete: if isAdmin();
+    }
+
+    match /weeks/{weekId}/entries/{entryId} {
+      allow read: if true;
+      allow create: if isApproved()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && weekId == cfg().weekId
+        && request.time.toMillis() >= cfg().opensAtMs
+        && request.resource.data.paid == 'no'
+        && validName(request.resource.data.name)
+        && (
+          (request.resource.data.type == 'membro' && request.resource.data.name == myMember().name)
+          || (request.resource.data.type == 'convidado' && request.resource.data.invitedBy == myMember().name)
+        );
+      allow update: if isAdmin()
+        || (signedIn() && resource.data.uid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['paid'])
+            && request.resource.data.paid in ['no', 'informed']);
+      allow delete: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+    }
+  }
+}
