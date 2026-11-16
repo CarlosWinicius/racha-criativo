@@ -1,27 +1,61 @@
 <!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Política de Privacidade · Racha Criativo</title>
-<link rel="icon" type="image/png" href="img/favicon.png">
+<link rel="icon" href="img/favicon.png">
 <style>
-body{font:16px/1.6 Inter,system-ui,sans-serif;max-width:720px;margin:0 auto;padding:24px 16px 48px;color:#1b1f2a;background:#f6f7fb}
-h1{color:#1d47c8}h2{margin-top:28px;font-size:1.15rem}a{color:#1d47c8}
-</style></head><body>
-<p><a href="./">&larr; Voltar ao Racha Criativo</a></p>
-<h1>Política de Privacidade</h1>
-<p>Última atualização: 16/11/2026</p>
-<p>O Racha Criativo é um site para organizar a lista do vôlei de domingo entre amigos. Esta política explica quais dados usamos e por quê.</p>
-<h2>Dados que coletamos</h2>
-<ul><li>Apelido, nome de exibição e e-mail (informados no cadastro ou vindos da sua conta Google, se você entrar com o Google).</li>
-<li>Dados de uso do racha: presença na lista, pagamentos marcados, votações e conquistas.</li></ul>
-<h2>Como usamos</h2>
-<p>Apenas para o funcionamento do site: identificar você, montar a lista, sortear times e mostrar o ranking. Não vendemos nem compartilhamos seus dados para publicidade.</p>
-<h2>Login com Google</h2>
-<p>Ao entrar com o Google, recebemos somente seu nome e e-mail, usados para criar e acessar sua conta. Não acessamos nenhum outro dado da sua conta Google.</p>
-<h2>Armazenamento</h2>
-<p>Os dados ficam no serviço Supabase, com acesso restrito. Nomes e apelidos aparecem para os outros participantes na lista e no ranking.</p>
-<h2>Seus direitos</h2>
-<p>Você pode pedir a correção ou exclusão da sua conta e dos seus dados a qualquer momento, falando com o organizador do racha ou pelo e-mail abaixo.</p>
-<h2>Contato</h2>
-<p><a href="mailto:carloswinicius055@gmail.com">carloswinicius055@gmail.com</a></p>
-</body></html>
+  :root { --bg: #eef1f8; --card: #fff; --fg: #141a2e; --muted: #5b6480; --court: #1d47c8; --border: #dde3f0; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #0c1120; --card: #151c31; --fg: #e9edf8; --muted: #9aa4c0; --court: #7c9cff; --border: #26304b; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 20px; }
+  h1 { font-size: 28px; line-height: 1.2; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 24px 0 6px; }
+  p, li { color: var(--fg); }
+  .muted { color: var(--muted); font-size: 14px; }
+  a { color: var(--court); }
+</style>
+</head>
+<body>
+<main>
+  <p><a href="./">← Voltar para o Racha Criativo</a></p>
+  <div class="card">
+    <h1>Política de Privacidade</h1>
+    <p class="muted">Racha Criativo · atualizada em 16 de novembro de 2026</p>
+
+    <p>O Racha Criativo é um site sem fins lucrativos feito por um grupo de amigos para organizar a lista do vôlei de domingo. Esta página explica quais dados guardamos e o que fazemos com eles.</p>
+
+    <h2>Dados que guardamos</h2>
+    <ul>
+      <li><b>Conta:</b> o nome que aparece na lista e o usuário ou e-mail usado para entrar. Se você entrar com o Google, recebemos do Google apenas o seu <b>nome</b> e <b>e-mail</b>.</li>
+      <li><b>Senha:</b> fica guardada de forma criptografada pelo nosso provedor de login (Supabase). Ninguém do grupo consegue ver a sua senha.</li>
+      <li><b>Uso do site:</b> em quais listas você entrou, convidados que levou, se avisou que pagou, em quem votou nas votações e as medalhas que ganhou.</li>
+      <li><b>No seu aparelho:</b> o site guarda no navegador a sua sessão e quais medalhas você já viu, para não repetir avisos.</li>
+    </ul>
+
+    <h2>Para que usamos</h2>
+    <p>Só para fazer o site funcionar: montar a lista na ordem de chegada, mostrar a espera, sortear times, contar votos e montar o ranking. Não usamos seus dados para propaganda e não vendemos nem passamos seus dados para ninguém.</p>
+
+    <h2>Quem vê o quê</h2>
+    <ul>
+      <li>Quem tem conta aprovada vê os nomes na lista, os times, os resultados das votações e o ranking.</li>
+      <li>Os organizadores do grupo também veem o e-mail de cada conta (para aprovar quem entra) e a marcação de pagamento.</li>
+      <li>Ninguém vê em quem você votou.</li>
+    </ul>
+
+    <h2>Onde ficam os dados</h2>
+    <p>Os dados ficam no Supabase (banco de dados e login) e o site é hospedado no GitHub Pages. Os pagamentos via Pix acontecem direto no app do seu banco: o site não recebe nem guarda dados bancários.</p>
+
+    <h2>Apagar a sua conta</h2>
+    <p>Você pode pedir a qualquer momento para apagar a sua conta e os seus dados. É só falar com um organizador no grupo do WhatsApp do racha que ele apaga.</p>
+
+    <h2>Mudanças</h2>
+    <p>Se esta política mudar, a data no topo desta página será atualizada.</p>
+
+    <p class="muted">Veja também os <a href="termos.html">Termos de Uso</a>.</p>
+  </div>
+</main>
+</body>
+</html>

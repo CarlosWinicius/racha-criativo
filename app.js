@@ -231,7 +231,8 @@ function viewAuth() {
       <button class="btn lg" type="submit">Criar conta</button>
       <p class="small muted center">Depois de criar, um organizador precisa aprovar seu acesso.</p>
     </form>`}
-  </section>`;
+  </section>
+  <p class="small muted center legal">Ao entrar, você concorda com os <a href="termos.html">Termos de Uso</a> e a <a href="privacidade.html">Política de Privacidade</a>.</p>`;
 }
 
 function viewPending() {
