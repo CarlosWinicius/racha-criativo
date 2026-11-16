@@ -168,3 +168,47 @@ end $$;
 -- trocando SEU-EMAIL e SEU NOME:
 -- update public.profiles set is_admin = true, status = 'approved', name = 'SEU NOME'
 --   where id = (select id from auth.users where email = 'SEU-EMAIL');
+
+-- =====================================================================
+-- Parte 2 (novembro/2026): admin reseta senha e adiciona gente na mão.
+-- =====================================================================
+
+-- "avulso" = alguém que o organizador colocou na lista sem conta. Conta como membro.
+alter table public.entries drop constraint if exists entries_kind_check;
+alter table public.entries add constraint entries_kind_check check (kind in ('membro', 'convidado', 'avulso'));
+
+create or replace function public.admin_add_entry(p_list uuid, p_name text) returns public.entries
+language plpgsql security definer set search_path = public as $$
+declare e entries; l lists; n text := left(trim(regexp_replace(coalesce(p_name, ''), '\s+', ' ', 'g')), 40);
+begin
+  if not is_admin() then raise exception 'Só organizadores podem fazer isso.'; end if;
+  if n = '' then raise exception 'Escreva o nome da pessoa.'; end if;
+  select * into l from lists where id = p_list;
+  if l.id is null then raise exception 'Lista não encontrada.'; end if;
+  begin
+    insert into entries (list_id, user_id, name, kind, invited_by)
+    values (p_list, auth.uid(), n, 'avulso', (select name from profiles where id = auth.uid()))
+    returning * into e;
+  exception when unique_violation then
+    raise exception 'Já tem alguém chamado "%" nessa lista.', n;
+  end;
+  return e;
+end $$;
+
+-- Gera uma senha temporária (ex.: volei4821) para quem esqueceu a senha.
+create or replace function public.admin_reset_password(p_user uuid) returns text
+language plpgsql security definer set search_path = public, extensions as $$
+declare pw text := 'volei' || lpad((floor(random() * 10000))::int::text, 4, '0');
+begin
+  if not is_admin() then raise exception 'Só organizadores podem fazer isso.'; end if;
+  if p_user = auth.uid() then raise exception 'Para trocar a sua senha, use Minha conta.'; end if;
+  update auth.users set encrypted_password = extensions.crypt(pw, extensions.gen_salt('bf')), updated_at = now()
+    where id = p_user;
+  if not found then raise exception 'Pessoa não encontrada.'; end if;
+  return pw;
+end $$;
+
+revoke all on function public.admin_add_entry(uuid, text) from public, anon;
+revoke all on function public.admin_reset_password(uuid) from public, anon;
+grant execute on function public.admin_add_entry(uuid, text) to authenticated;
+grant execute on function public.admin_reset_password(uuid) to authenticated;

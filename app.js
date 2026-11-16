@@ -105,7 +105,8 @@ function stopRealtime() { if (channel) { sb.removeChannel(channel); channel = nu
 function ordered(l) {
   const es = entries[l.id] || [];
   const byTime = (a, b) => (a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : a.id < b.id ? -1 : 1);
-  const all = es.filter((e) => e.kind === "membro").sort(byTime).concat(es.filter((e) => e.kind === "convidado").sort(byTime));
+  // "avulso" (colocado pelo organizador) conta como membro
+  const all = es.filter((e) => e.kind !== "convidado").sort(byTime).concat(es.filter((e) => e.kind === "convidado").sort(byTime));
   const n = Number(l.spots) || 18;
   return { main: all.slice(0, n), wait: all.slice(n), spots: n };
 }
@@ -247,7 +248,7 @@ function rowHtml(l, e, n, inMain) {
   const mineRow = e.user_id === uid();
   const can = mineRow || me.is_admin;
   const inner = `<span class="num">${n}</span>
-    <span class="who"><b>${esc(e.name)}</b>${e.kind === "convidado" ? `<small>convidado de ${esc(e.invited_by)}</small>` : ""}</span>
+    <span class="who"><b>${esc(e.name)}</b>${e.kind === "convidado" ? `<small>convidado de ${esc(e.invited_by)}</small>` : e.kind === "avulso" ? `<small>colocado por ${esc(e.invited_by)}</small>` : ""}</span>
     ${inMain ? pill(e.paid) : ""}${can ? `<span class="chev" aria-hidden="true">›</span>` : ""}`;
   return `<li class="${mineRow ? "mine" : ""}">${can
     ? `<button class="rowbtn" type="button" data-act="row" data-list="${l.id}" data-id="${e.id}" aria-label="Opções de ${esc(e.name)}">${inner}</button>`
@@ -296,6 +297,7 @@ function viewList(id) {
   </section>` : ""}
   <div class="tools">
     ${mine && !isPast(l) ? `<button class="btn ghost" data-act="guest" data-list="${l.id}">+ Convidado</button>` : ""}
+    ${me.is_admin ? `<button class="btn ghost" data-act="addPerson" data-list="${l.id}">+ Colocar pessoa</button>` : ""}
     <button class="btn ghost" data-act="pix" data-list="${l.id}">Pix ${money(l.price)}</button>
     <button class="btn ghost" data-act="copy" data-list="${l.id}">Copiar p/ WhatsApp</button>
   </div>`;
@@ -355,6 +357,7 @@ function viewAdmin() {
         <span class="mini-acts">${m.id === uid() ? `<span class="small muted">você</span>` : `
           ${m.status === "approved"
             ? `<button class="btn sm ghost" data-act="setAdmin" data-id="${m.id}" data-val="${m.is_admin ? "0" : "1"}" ${m.is_admin ? 'data-confirm="Tirar admin?"' : ""}>${m.is_admin ? "Tirar admin" : "Tornar admin"}</button>
+               <button class="btn sm ghost" data-act="resetPw" data-id="${m.id}" data-name="${esc(m.name)}" data-confirm="Gerar senha nova?">Resetar senha</button>
                <button class="btn sm ghost danger-txt" data-act="setStatus" data-id="${m.id}" data-status="rejected" data-confirm="Bloquear?">Bloquear</button>`
             : `<button class="btn sm" data-act="setStatus" data-id="${m.id}" data-status="approved">Aprovar</button>`}`}
         </span></div></li>`).join("")}</ol>`;
@@ -393,8 +396,11 @@ function pixSheet(l) {
   <div class="pix">
     <div><span class="small muted">Valor por pessoa</span><div class="price">${money(l.price)}</div></div>
     ${l.pix_name ? `<div class="small muted">Para: <b>${esc(l.pix_name)}</b></div>` : ""}
-    <div class="pixkey"><code>${esc(l.pix_key || "O organizador ainda não cadastrou a chave")}</code></div>
-    ${l.pix_key ? `<button class="btn lg ghost" data-act="copyPix" data-list="${l.id}">Copiar chave Pix</button>` : ""}
+    ${l.pix_key ? `
+    <button class="btn lg" data-act="copyPixCode" data-list="${l.id}">Copiar Pix copia e cola</button>
+    <p class="small muted">No app do banco: <b>Pix</b> → <b>Pix copia e cola</b> → cole. O valor de ${money(l.price)} já vai preenchido.</p>
+    <div class="pixkey"><span class="small muted">Ou use a chave:</span><br><code>${esc(l.pix_key)}</code></div>
+    <button class="btn ghost" data-act="copyPix" data-list="${l.id}">Copiar só a chave</button>` : `<div class="pixkey"><code>O organizador ainda não cadastrou a chave Pix.</code></div>`}
     ${mine && mine.where === "main" && (mine.entry.paid || "no") === "no" ? `<button class="btn lg yellow" data-act="paid" data-list="${l.id}" data-id="${mine.entry.id}">Já paguei</button>
     <p class="small muted center">Depois de pagar, toque em <b>Já paguei</b>. O organizador confirma.</p>` : ""}
   </div>`;
@@ -414,10 +420,10 @@ function rowSheet(l, e) {
       ? `<button class="btn lg ghost" data-act="setPaid" data-list="${l.id}" data-id="${e.id}" data-val="no">Marcar como não pago</button>`
       : `<button class="btn lg" data-act="setPaid" data-list="${l.id}" data-id="${e.id}" data-val="confirmed">Confirmar pagamento</button>`);
   }
-  const label = mineRow ? (e.kind === "convidado" ? "Tirar convidado" : "Sair da lista") : "Remover da lista";
+  const label = mineRow && e.kind === "membro" ? "Sair da lista" : mineRow && e.kind === "convidado" ? "Tirar convidado" : "Remover da lista";
   acts.push(`<button class="btn lg ghost danger-txt" data-act="leave" data-list="${l.id}" data-id="${e.id}" data-confirm="Toque de novo para confirmar">${label}</button>`);
   return `<h2 class="h2">${esc(e.name)}</h2>
-  <p class="small muted">${e.kind === "convidado" ? "Convidado de " + esc(e.invited_by) + " · " : ""}entrou às ${new Date(e.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p>
+  <p class="small muted">${e.kind === "convidado" ? "Convidado de " + esc(e.invited_by) + " · " : e.kind === "avulso" ? "Colocado por " + esc(e.invited_by) + " · " : ""}entrou às ${new Date(e.created_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</p>
   <div class="stack">${acts.join("")}</div>`;
 }
 
@@ -432,13 +438,72 @@ function accountSheet() {
   const user = session.user.email.endsWith("@" + EMAIL_DOMAIN) ? session.user.email.split("@")[0] : session.user.email;
   return `<h2 class="h2">${esc(me ? me.name : "Sua conta")}</h2>
   <p class="small muted">Usuário: ${esc(user)}${me && me.is_admin ? " · organizador" : ""}</p>
-  <div class="stack"><button class="btn lg ghost" data-act="logout">Sair da conta</button></div>`;
+  ${isStandalone() ? "" : `<div class="stack">
+    <button class="btn lg yellow" data-act="install">Instalar como app</button>
+    <p class="small muted" id="installHelp" hidden></p>
+  </div>`}
+  <form data-form="changePw" class="stack">
+    <label class="field">Nova senha<input id="newPw" type="password" minlength="6" required autocomplete="new-password"><small>Não use uma senha de verdade. Pelo menos 6 caracteres.</small></label>
+    <button class="btn lg ghost" type="submit">Trocar senha</button>
+  </form>
+  <button class="btn lg ghost danger-txt" data-act="logout">Sair da conta</button>`;
 }
+
+const addPersonSheet = (l) => `<h2 class="h2">Colocar pessoa na lista</h2>
+  <p class="small muted">Para quem não tem conta ou está sem celular. Entra como membro, na ordem de agora.</p>
+  <form data-form="addPerson" data-list="${l.id}" class="stack">
+    <label class="field">Nome<input id="pName" type="text" maxlength="40" required></label>
+    <button class="btn lg" type="submit">Colocar na lista</button>
+  </form>`;
+
+// ---------- Pix copia e cola (padrão BR Code do Banco Central) ----------
+function crc16(s) {
+  let c = 0xffff;
+  for (let i = 0; i < s.length; i++) {
+    c ^= s.charCodeAt(i) << 8;
+    for (let j = 0; j < 8; j++) c = c & 0x8000 ? ((c << 1) ^ 0x1021) & 0xffff : (c << 1) & 0xffff;
+  }
+  return c.toString(16).toUpperCase().padStart(4, "0");
+}
+const tlv = (id, v) => id + String(v.length).padStart(2, "0") + v;
+const asciiUp = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^A-Za-z0-9 ]/g, "").trim().toUpperCase();
+function validCPF(c) {
+  if (!/^\d{11}$/.test(c) || /^(\d)\1+$/.test(c)) return false;
+  for (const n of [9, 10]) {
+    let s = 0; for (let i = 0; i < n; i++) s += Number(c[i]) * (n + 1 - i);
+    if (((s * 10) % 11) % 10 !== Number(c[n])) return false;
+  }
+  return true;
+}
+function pixKey(k) {
+  k = String(k || "").trim();
+  if (k.includes("@")) return k.toLowerCase();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(k)) return k.toLowerCase();
+  const digits = k.replace(/\D/g, "");
+  if (k.startsWith("+")) return "+" + digits;
+  if (digits.length === 14) return digits; // CNPJ
+  if (digits.length === 11 && validCPF(digits)) return digits; // CPF
+  if (digits.length === 10 || digits.length === 11) return "+55" + digits; // celular com DDD
+  if (digits.length === 12 || digits.length === 13) return "+" + digits;
+  return k;
+}
+function pixCode(l) {
+  const acc = tlv("00", "br.gov.bcb.pix") + tlv("01", pixKey(l.pix_key));
+  let p = tlv("00", "01") + tlv("26", acc) + tlv("52", "0000") + tlv("53", "986");
+  if (Number(l.price) > 0) p += tlv("54", Number(l.price).toFixed(2));
+  p += tlv("58", "BR") + tlv("59", (asciiUp(l.pix_name) || "RACHA CRIATIVO").slice(0, 25)) + tlv("60", "BRASIL") + tlv("62", tlv("05", "***")) + "6304";
+  return p + crc16(p);
+}
+
+// ---------- instalar como app ----------
+let installPrompt = null;
+window.addEventListener("beforeinstallprompt", (e) => { e.preventDefault(); installPrompt = e; });
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
 
 // ---------- WhatsApp ----------
 function whatsappText(l) {
   const { main, wait, spots } = ordered(l), d = parseDate(l.game_date);
-  const tag = (e) => (e.kind === "convidado" ? ` (conv. ${e.invited_by})` : "");
+  const tag = (e) => (e.kind === "convidado" ? ` (conv. ${e.invited_by})` : e.kind === "avulso" ? " (avulso)" : "");
   const out = [l.title.toUpperCase(), `${WD[d.getDay()]} (${pad(d.getDate())}/${pad(d.getMonth() + 1)})`, `${hour(l.start_time)}-${hour(l.end_time)}`, ""];
   for (let i = 0; i < spots; i++) { const e = main[i]; out.push(e ? `${i + 1}. ${e.name}${tag(e)}${e.paid === "confirmed" ? " ✅" : ""}` : `${i + 1}. `); }
   out.push("", "espera:");
@@ -477,6 +542,25 @@ const actions = {
   setPaid: async (d) => { if (await run(sb.from("entries").update({ paid: d.val }).eq("id", d.id), d.val === "confirmed" ? "Pagamento confirmado." : "Marcado como não pago.")) closeSheet(); },
   pix: (d) => { const l = findList(d.list); if (l) openSheet(pixSheet(l)); },
   copyPix: (d) => { const l = findList(d.list); if (l) copy(l.pix_key, "Chave Pix copiada."); },
+  copyPixCode: (d) => { const l = findList(d.list); if (l) copy(pixCode(l), "Pix copia e cola copiado. Cole no app do banco."); },
+  addPerson: (d) => { const l = findList(d.list); if (l) openSheet(addPersonSheet(l)); },
+  resetPw: async (d) => {
+    const r = await sb.rpc("admin_reset_password", { p_user: d.id });
+    if (r.error) return toast(errMsg(r.error));
+    openSheet(`<h2 class="h2">Senha nova de ${esc(d.name)}</h2>
+      <div class="pixkey"><code>${esc(r.data)}</code></div>
+      <button class="btn lg" data-act="copyText" data-text="${esc(r.data)}">Copiar senha</button>
+      <p class="small muted">Mande para a pessoa no privado. Ela entra com o mesmo usuário e essa senha, e depois troca em <b>Minha conta</b>.</p>`);
+  },
+  copyText: (d) => copy(d.text, "Copiado."),
+  install: async () => {
+    if (installPrompt) { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; closeSheet(); return; }
+    const help = $("#installHelp"); if (!help) return;
+    help.hidden = false;
+    help.innerHTML = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+      ? "No iPhone: abra no <b>Safari</b>, toque em <b>Compartilhar</b> (o quadrado com a seta) e depois em <b>Adicionar à Tela de Início</b>."
+      : "No Android: abra no <b>Chrome</b>, toque nos <b>três pontinhos</b> e depois em <b>Adicionar à tela inicial</b> ou <b>Instalar app</b>.";
+  },
   copy: (d) => { const l = findList(d.list); if (l) copy(whatsappText(l), "Lista copiada. Cole no grupo!"); },
   guest: (d) => { const l = findList(d.list); if (l) openSheet(guestSheet(l)); },
   row: (d) => { const l = findList(d.list), e = findEntry(d.list, d.id); if (l && e) openSheet(rowSheet(l, e)); },
@@ -506,6 +590,17 @@ const forms = {
     const { data, error } = await sb.auth.signUp({ email: userToEmail(user), password, options: { data: { name } } });
     if (error) return toast(errMsg(error));
     if (!data.session) toast("Conta criada, mas o Supabase pediu confirmação de e-mail. Avise o organizador para desligar isso.");
+  },
+  async addPerson(f) {
+    const name = clean($("#pName").value);
+    if (await run(sb.rpc("admin_add_entry", { p_list: f.dataset.list, p_name: name }), name + " foi colocado na lista.")) closeSheet();
+  },
+  async changePw(f) {
+    const password = $("#newPw").value;
+    if (password.length < 6) return toast("A senha precisa ter pelo menos 6 caracteres.");
+    const { error } = await sb.auth.updateUser({ password });
+    if (error) return toast(/same|different/i.test(error.message) ? "Essa já é a sua senha atual." : errMsg(error));
+    toast("Senha trocada."); closeSheet();
   },
   async guest(f) {
     const name = clean($("#gName").value);
