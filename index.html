@@ -197,6 +197,46 @@ main {
 .banner .eyebrow { color: var(--line); text-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
 .banner .title { color: #fff; text-shadow: 0 2px 10px rgba(0, 0, 0, .45); }
 .banner p { margin: 0; opacity: .92; text-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
+/* melhor do dia */
+.seg.four { grid-template-columns: repeat(4, 1fr); }
+.seg.four button { font-size: 13px; padding: 0 4px; }
+.h3 { margin: 0; font: 700 18px/1.1 var(--display); text-transform: uppercase; letter-spacing: .04em; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.h3 small { font: 500 13px var(--body); text-transform: none; letter-spacing: 0; color: var(--muted); }
+.my-votes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.my-votes li { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; border-radius: 10px; background: var(--bg2); font-size: 14px; }
+.my-votes li b { text-align: right; overflow-wrap: anywhere; }
+.awards { list-style: none; margin: 0; padding: 0; width: 100%; display: grid; gap: 6px; text-align: left; }
+.awards li { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--bg2); }
+.aw-icon { font-size: 24px; text-align: center; }
+.aw-txt { display: grid; min-width: 0; }
+.aw-txt small { font-size: 12px; color: var(--muted); }
+.aw-txt b { overflow-wrap: anywhere; }
+.medals { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
+.medal { display: grid; justify-items: center; text-align: center; gap: 2px; padding: 10px 6px; border-radius: 14px; border: 1.5px dashed var(--border); opacity: .45; filter: grayscale(1); }
+.medal.got { opacity: 1; filter: none; border-style: solid; border-color: var(--line); background: color-mix(in srgb, var(--line) 14%, var(--card)); }
+.medal.got.gold { background: var(--line); color: #1a1400; }
+.medal.got.gold small { color: #3a2f00; }
+.m-icon { font-size: 28px; line-height: 1.1; }
+.medal b { font-size: 12px; line-height: 1.2; }
+.medal small { font-size: 11px; color: var(--muted); line-height: 1.2; }
+.mvp p { margin: 0; }
+.mvp.done { justify-items: center; text-align: center; background:
+  radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--line) 28%, transparent), transparent 70%), var(--card); }
+.trophy { font-size: 46px; line-height: 1; }
+.mvp-name { margin: 0; font: 800 clamp(32px, 10vw, 44px)/1 var(--display); text-transform: uppercase; color: var(--brand-text); text-wrap: balance; }
+.podium { list-style: none; margin: 0; padding: 0; width: 100%; display: grid; gap: 6px; }
+.podium li { display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center; padding: 8px 12px; border-radius: 10px; background: var(--bg2); text-align: left; }
+.podium li:first-child { background: var(--line); color: #1a1400; }
+.podium li:first-child .num { color: #1a1400; }
+.vote-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.vote-opt { min-height: 52px; padding: 8px 12px; border-radius: 12px; border: 1.5px solid var(--border); background: var(--card); font-weight: 600; font-size: 15px; cursor: pointer; overflow-wrap: anywhere; }
+.vote-opt:active { transform: scale(.97); }
+.vote-opt.on { background: var(--line); border-color: var(--line); color: #1a1400; }
+/* playlist */
+.extras { max-width: 560px; margin: -18px auto 0; padding-block: 0 32px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.playlist { gap: 10px; }
+.playlist iframe { width: 100%; height: 152px; border: 0; border-radius: 12px; display: block; background: var(--bg2); }
+.btn.spotify { background: #1db954; color: #08210f; }
 /* times do dia */
 .admin-cta { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .lev { display: inline-block; font: 700 10px/1 var(--body); letter-spacing: .06em; padding: 3px 6px; border-radius: 6px; background: var(--line); color: #1a1400; vertical-align: 2px; }
@@ -253,6 +293,7 @@ li.mine .rowbtn { background: var(--me-bg); }
 .who { min-width: 0; display: grid; overflow-wrap: anywhere; }
 .who b { font-weight: 600; }
 .who small { font-size: 12px; color: var(--muted); }
+.who .pill { justify-self: start; }
 li.free { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: center; padding: 14px 16px; color: var(--muted); }
 li.free span:last-child { border: 1.5px dashed var(--border); border-radius: 10px; padding: 8px 12px; font-size: 14px; }
 .pill { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 99px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
@@ -330,6 +371,14 @@ li.free span:last-child { border: 1.5px dashed var(--border); border-radius: 10p
 
 <main id="app"></main>
 
+<section id="playlist" class="extras" hidden>
+  <div class="card playlist">
+    <h2 class="h2">Playlist do racha</h2>
+    <iframe title="Playlist do racha no Spotify" loading="lazy" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"></iframe>
+    <a class="btn spotify" href="https://open.spotify.com/playlist/1Y9FLdFo2epGHk4GyRNrVI" target="_blank" rel="noopener">Abrir no Spotify</a>
+  </div>
+</section>
+
 <div id="bar" class="actionbar" hidden><div class="bar-in"></div></div>
 
 <div id="sheet" class="sheet" hidden>
@@ -343,7 +392,7 @@ li.free span:last-child { border: 1.5px dashed var(--border); border-radius: 10p
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="config.js?v=202611160016"></script>
-<script src="app.js?v=202611160016"></script>
+<script src="config.js?v=1794799469391"></script>
+<script src="app.js?v=1794799469391"></script>
 </body>
 </html>

@@ -47,6 +47,7 @@ function errMsg(e) {
 // ---------- estado ----------
 let session = null, me = null, meLoaded = false;
 let lists = [], listsLoaded = false, entries = {}, members = [];
+let votes = {}; // { [listId]: { mine, results: [{entry_id, votes}], total, closed } }
 let tiers = {}; // só para admins: { "u:<pessoa>": 1..3, "e:<inscrição>": 1..3 }
 let route = parseRoute(), authTab = "login", adminTab = "lists";
 let channel = null;
@@ -81,6 +82,23 @@ async function refresh() {
         (e.data || []).forEach((x) => next[x.list_id] && next[x.list_id].push(x));
       }
       entries = next;
+      // votação do melhor do dia (listas com votação aberta ou que fechou há pouco)
+      const vnext = {};
+      await Promise.all(lists.filter(showVoting).map(async (l) => {
+        const [r, m] = await Promise.all([
+          sb.rpc("vote_results", { p_list: l.id }),
+          sb.from("votes").select("category,entry_id").eq("list_id", l.id).eq("voter", uid()),
+        ]);
+        const rows = r.data || [], results = {};
+        rows.filter((x) => x.entry_id).forEach((x) => (results[x.category] = results[x.category] || []).push({ entry_id: x.entry_id, votes: Number(x.votes) }));
+        vnext[l.id] = {
+          mine: Object.fromEntries((m.data || []).map((x) => [x.category, x.entry_id])),
+          results,
+          total: rows.length ? Number(rows[0].total_voters) : 0,
+        };
+      }));
+      votes = vnext;
+      checkAchievements();
     }
     if (me && me.is_admin) {
       const m = await sb.from("profiles").select("*").order("created_at");
@@ -122,6 +140,19 @@ function myPlace(l) {
   return null;
 }
 const isPast = (l) => l.game_date < todayISO();
+// Votação: abre na hora do jogo, fecha no dia seguinte às 23:59 (Brasília, UTC-3)
+function voteWindow(l) {
+  const opens = new Date(`${l.game_date}T${(l.start_time || "16:00").slice(0, 5)}:00-03:00`).getTime();
+  const next = isoDate(addDays(parseDate(l.game_date), 1));
+  return { opens, closes: new Date(`${next}T23:59:59-03:00`).getTime() };
+}
+function votePhase(l) {
+  const w = voteWindow(l), now = Date.now();
+  return now < w.opens ? "before" : now <= w.closes ? "open" : "closed";
+}
+// mostra votação/resultado até 3 dias depois de fechar
+const showVoting = (l) => votePhase(l) !== "before" && Date.now() - voteWindow(l).closes < 3 * 864e5;
+const canVote = (l) => votePhase(l) === "open" && (entries[l.id] || []).some((e) => e.user_id === uid() && e.kind === "membro");
 const isOpen = (l) => !l.opens_at || Date.now() >= new Date(l.opens_at).getTime();
 
 // ---------- render ----------
@@ -145,6 +176,7 @@ function render() {
   for (const id in keep) { const el = document.getElementById(id); if (el && el.type !== "password") el.value = keep[id]; }
   if (focusId) { const el = document.getElementById(focusId); if (el) el.focus(); }
   renderTopbar(); renderBar(); tick();
+  renderPlaylist(!!(configured && session && me && approved() && route.name === "home"));
 }
 
 function renderTopbar() {
@@ -207,6 +239,13 @@ function dateBadge(l) {
 
 function statusChip(l) {
   const { main, wait, spots } = ordered(l), mine = myPlace(l);
+  if (showVoting(l)) {
+    const v = votes[l.id];
+    if (votePhase(l) === "open") return `<span class="chip me">${v && votedAll(l) ? "você já votou" : "vote nos melhores do dia"}</span>`;
+    const top = v && v.results.mvp && v.results.mvp[0];
+    const win = top && (entries[l.id] || []).find((e) => e.id === top.entry_id);
+    return `<span class="chip ok">${win ? "melhor do dia: " + esc(win.name) : "votação encerrada"}</span>`;
+  }
   if (isPast(l)) return `<span class="chip">encerrada</span>`;
   if (mine) return `<span class="chip me">${mine.where === "main" ? "você: nº " + mine.n : "espera: nº " + mine.n}</span>`;
   if (!isOpen(l)) return `<span class="chip warn">abre ${esc(fmtOpen(l.opens_at))}</span>`;
@@ -215,7 +254,7 @@ function statusChip(l) {
 }
 
 function viewHome() {
-  const up = lists.filter((l) => !isPast(l));
+  const up = lists.filter((l) => !isPast(l) || showVoting(l));
   const cards = up.map((l) => {
     const { main, spots } = ordered(l), d = parseDate(l.game_date);
     return `<a class="game" href="#l-${l.id}">
@@ -241,6 +280,15 @@ function viewHome() {
     <p class="muted">${me.is_admin ? "Crie a lista do próximo domingo na área do organizador." : "Os organizadores criam a lista da semana. Ela aparece aqui."}</p>
     ${me.is_admin ? `<a class="btn" href="#admin">Criar lista</a>` : ""}
   </div>`}`;
+}
+
+// A playlist fica fora do #app para o player não recarregar (e cortar a música) a cada atualização.
+const PLAYLIST_ID = "1Y9FLdFo2epGHk4GyRNrVI";
+function renderPlaylist(show) {
+  const box = $("#playlist");
+  box.hidden = !show;
+  const f = box.querySelector("iframe");
+  if (show && !f.src) f.src = `https://open.spotify.com/embed/playlist/${PLAYLIST_ID}?utm_source=generator&theme=0`;
 }
 
 function pill(paid) {
@@ -292,6 +340,7 @@ function viewList(id) {
     <span>${main.length >= spots ? "<b>Lista completa!</b> Hora de sortear os times." : `Times: o sorteio libera quando a lista completar (${main.length}/${spots}).`}</span>
     <button class="btn sm ${main.length >= spots ? "yellow" : "ghost"}" data-act="teams" data-list="${l.id}">${main.length >= spots ? "Sortear times" : "Marcar levantadores"}</button>
   </div>` : ""}
+  ${mvpSection(l)}
   ${teamsSection(l)}
   <section class="card flush">
     <h2 class="h2 pad">Lista <small>${main.length >= spots ? "lotada" : spots - main.length + " vagas livres"}</small></h2>
@@ -316,9 +365,15 @@ function viewList(id) {
 function renderBar() {
   const bar = $("#bar");
   const l = route.name === "list" && approved() && lists.find((x) => x.id === route.id);
-  if (!l || isPast(l)) { bar.hidden = true; document.body.classList.remove("has-bar"); return; }
+  const hideBar = () => { bar.hidden = true; document.body.classList.remove("has-bar"); };
+  if (!l) return hideBar();
   const { main, spots } = ordered(l), mine = myPlace(l);
   let h;
+  if (canVote(l) && !votedAll(l)) {
+    bar.querySelector(".bar-in").innerHTML = `<button class="btn lg yellow" data-act="vote" data-list="${l.id}">Votar nos melhores do dia</button>`;
+    bar.hidden = false; document.body.classList.add("has-bar"); return;
+  }
+  if (isPast(l)) return hideBar();
   if (!isOpen(l)) h = `<button class="btn lg" disabled>Abre em&nbsp;<span data-cd="${l.opens_at}"></span></button>`;
   else if (!mine) h = `<button class="btn lg" data-act="join" data-list="${l.id}">${main.length >= spots ? "Entrar na espera" : "Entrar na lista"}</button>`;
   else if (mine.where === "wait") h = `<span class="bar-txt">Espera: nº ${mine.n}</span><button class="btn lg ghost" data-act="leave" data-list="${l.id}" data-id="${mine.entry.id}" data-confirm="Sair da espera?">Sair da espera</button>`;
@@ -450,6 +505,7 @@ function accountSheet() {
   const user = session.user.email.endsWith("@" + EMAIL_DOMAIN) ? session.user.email.split("@")[0] : session.user.email;
   return `<h2 class="h2">${esc(me ? me.name : "Sua conta")}</h2>
   <p class="small muted">Usuário: ${esc(user)}${me && me.is_admin ? " · organizador" : ""}</p>
+  ${medalsHtml()}
   ${isStandalone() ? "" : `<div class="stack">
     <button class="btn lg yellow" data-act="install">Instalar como app</button>
     <p class="small muted" id="installHelp" hidden></p>
@@ -459,6 +515,93 @@ function accountSheet() {
     <button class="btn lg ghost" type="submit">Trocar senha</button>
   </form>
   <button class="btn lg ghost danger-txt" data-act="logout">Sair da conta</button>`;
+}
+
+// ---------- melhores do dia ----------
+const CATS = [
+  { key: "mvp", name: "Melhor do dia", short: "Melhor", icon: "🏆", ask: "Quem jogou mais hoje?" },
+  { key: "ataque", name: "Melhor atacante", short: "Ataque", icon: "💥", ask: "Quem mais pontuou no ataque?" },
+  { key: "defesa", name: "Melhor defesa", short: "Defesa", icon: "🧤", ask: "Quem salvou mais bolas?" },
+  { key: "bloqueio", name: "Maior bloqueador", short: "Bloqueio", icon: "🧱", ask: "Quem mais parou bola na rede?" },
+];
+const plural = (n, a, b) => `${n} ${n === 1 ? a : b}`;
+const votedAll = (l) => { const m = (votes[l.id] || {}).mine || {}; return CATS.every((c) => m[c.key]); };
+let voteCat = "mvp";
+
+// vencedor(es) de uma categoria (empate = todos com o máximo de votos)
+function catWinners(l, cat) {
+  const rs = ((votes[l.id] || {}).results || {})[cat] || [];
+  if (!rs.length) return [];
+  return rs.filter((r) => r.votes === rs[0].votes);
+}
+
+function mvpSection(l) {
+  if (!showVoting(l)) return "";
+  const v = votes[l.id] || { mine: {}, results: {}, total: 0 };
+  const byId = Object.fromEntries((entries[l.id] || []).map((e) => [e.id, e]));
+  const nameOf = (id) => (byId[id] ? byId[id].name : "?");
+  if (votePhase(l) === "open") {
+    const closeDay = addDays(parseDate(l.game_date), 1);
+    return `<section class="card mvp">
+      <h2 class="h2">Melhores do dia <small>fecha ${WD3[closeDay.getDay()]} às 23:59</small></h2>
+      <p><b>${plural(v.total, "pessoa votou", "pessoas votaram")}</b> até agora. O resultado aparece quando a votação fechar.</p>
+      ${canVote(l) ? `<ul class="my-votes">${CATS.map((c) => `<li><span>${c.icon} ${c.name}</span>${v.mine[c.key] ? `<b>${esc(nameOf(v.mine[c.key]))}</b>` : `<span class="muted">falta votar</span>`}</li>`).join("")}</ul>
+        <button class="btn ${votedAll(l) ? "ghost" : "yellow"}" data-act="vote" data-list="${l.id}">${votedAll(l) ? "Trocar votos" : "Votar"}</button>`
+        : `<p class="small muted">Só quem estava na lista pode votar.</p>`}
+      ${me.is_admin && Object.keys(v.results).length ? `<p class="small muted">Parcial (só organizadores): ${CATS.map((c) => { const w = catWinners(l, c.key); return w.length ? `${c.short}: ${w.map((r) => esc(nameOf(r.entry_id))).join("/")} (${w[0].votes})` : ""; }).filter(Boolean).join(" · ")}</p>` : ""}
+    </section>`;
+  }
+  const mvp = catWinners(l, "mvp");
+  if (!v.total) return `<section class="card mvp"><h2 class="h2">Melhores do dia</h2><p class="muted">Ninguém votou dessa vez.</p></section>`;
+  return `<section class="card mvp done">
+    ${mvp.length ? `<div class="trophy" aria-hidden="true">🏆</div>
+    <span class="eyebrow">${mvp.length > 1 ? "Empate! Melhores do dia" : "Melhor do dia"}</span>
+    <h2 class="mvp-name">${mvp.map((r) => esc(nameOf(r.entry_id))).join(" e ")}</h2>
+    <p class="small muted">${plural(mvp[0].votes, "voto", "votos")} · ${plural(v.total, "pessoa votou", "pessoas votaram")}</p>` : ""}
+    <ul class="awards">${CATS.filter((c) => c.key !== "mvp").map((c) => { const w = catWinners(l, c.key); return `<li><span class="aw-icon" aria-hidden="true">${c.icon}</span><span class="aw-txt"><small>${c.name}</small><b>${w.length ? w.map((r) => esc(nameOf(r.entry_id))).join(" e ") : "sem votos"}</b></span>${w.length ? `<span class="small muted">${plural(w[0].votes, "voto", "votos")}</span>` : ""}</li>`; }).join("")}</ul>
+  </section>`;
+}
+
+function voteSheet(l) {
+  const v = votes[l.id] || { mine: {} };
+  const cat = CATS.find((c) => c.key === voteCat) || CATS[0];
+  const cands = ordered(l).main.filter((e) => !(e.kind === "membro" && e.user_id === uid()));
+  return `<div class="seg four" role="tablist">${CATS.map((c) => `<button role="tab" class="${c.key === cat.key ? "on" : ""}" data-act="voteCat" data-list="${l.id}" data-cat="${c.key}">${v.mine[c.key] ? "✓ " : ""}${c.short}</button>`).join("")}</div>
+  <h2 class="h2">${cat.icon} ${cat.name}</h2>
+  <p class="small muted">${cat.ask} Toque em um nome. Dá para trocar até a votação fechar, e ninguém vê em quem você votou.</p>
+  <div class="vote-grid">${cands.map((e) => `<button type="button" class="vote-opt ${v.mine[cat.key] === e.id ? "on" : ""}" data-act="castVote" data-list="${l.id}" data-id="${e.id}" data-cat="${cat.key}">${esc(e.name)}</button>`).join("")}</div>`;
+}
+
+// ---------- conquistas (estilo Hevy) ----------
+const GAME_MILESTONES = [1, 5, 10, 25, 50];
+let achievements = null; // { wins: [{category, date, title}], games }
+function medalsFrom(a) {
+  const out = [];
+  GAME_MILESTONES.forEach((n) => out.push({ id: "games-" + n, icon: "🏐", name: n === 1 ? "Primeiro racha" : `${n} rachas`, got: a.games >= n, sub: n === 1 ? "Jogou o primeiro" : `Jogou ${n} vezes` }));
+  CATS.forEach((c) => {
+    const k = a.wins.filter((w) => w.category === c.key).length;
+    out.push({ id: c.key + "-1", icon: c.icon, name: c.name, got: k >= 1, sub: k ? `Ganhou ${plural(k, "vez", "vezes")}` : "Ganhe uma votação" });
+    out.push({ id: c.key + "-5", icon: c.icon, name: c.name + " ×5", got: k >= 5, sub: "Ganhe 5 vezes", gold: true });
+  });
+  return out;
+}
+async function checkAchievements() {
+  const r = await sb.rpc("my_achievements");
+  if (r.error || !r.data) return;
+  achievements = r.data;
+  const got = medalsFrom(achievements).filter((m) => m.got).map((m) => m.id);
+  let seen = null; try { seen = JSON.parse(localStorage.getItem("racha-medals-" + uid())); } catch {}
+  if (seen) {
+    const fresh = medalsFrom(achievements).filter((m) => m.got && !seen.includes(m.id));
+    if (fresh.length) toast(`${fresh[0].icon} Conquista desbloqueada: ${fresh[0].name}!${fresh.length > 1 ? ` (+${fresh.length - 1})` : ""}`);
+  }
+  try { localStorage.setItem("racha-medals-" + uid(), JSON.stringify(got)); } catch {}
+}
+function medalsHtml() {
+  if (!achievements) return `<p class="small muted">Carregando conquistas…</p>`;
+  const ms = medalsFrom(achievements), n = ms.filter((m) => m.got).length;
+  return `<h3 class="h3">Minhas conquistas <small>${n} de ${ms.length}</small></h3>
+  <div class="medals">${ms.map((m) => `<div class="medal ${m.got ? "got" : ""} ${m.gold ? "gold" : ""}" title="${esc(m.sub)}"><span class="m-icon" aria-hidden="true">${m.icon}</span><b>${esc(m.name)}</b><small>${esc(m.sub)}</small></div>`).join("")}</div>`;
 }
 
 // ---------- times do dia ----------
@@ -570,12 +713,32 @@ function teamsText(l) {
   return out.join("\n");
 }
 
-const addPersonSheet = (l) => `<h2 class="h2">Colocar pessoa na lista</h2>
-  <p class="small muted">Para quem não tem conta ou está sem celular. Entra como membro, na ordem de agora.</p>
-  <form data-form="addPerson" data-list="${l.id}" class="stack">
-    <label class="field">Nome<input id="pName" type="text" maxlength="40" required></label>
-    <button class="btn lg" type="submit">Colocar na lista</button>
-  </form>`;
+function addPersonSheet(l, q = "") {
+  const inList = new Set((entries[l.id] || []).filter((e) => e.kind === "membro").map((e) => e.user_id));
+  const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const people = members.filter((m) => m.status === "approved" && !inList.has(m.id) && norm(m.name).includes(norm(q)))
+    .sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+  return `<h2 class="h2">Colocar pessoa na lista</h2>
+  <p class="small muted">Toque em quem tem conta no app. A pessoa entra na ordem de agora, como se tivesse entrado sozinha, e pode sair, pagar e votar.</p>
+  <label class="field">Buscar<input id="pSearch" type="search" value="${esc(q)}" placeholder="Nome" autocomplete="off" data-search="${l.id}"></label>
+  <div class="vote-grid" id="pResults">${people.length
+    ? people.map((m) => `<button type="button" class="vote-opt" data-act="addMember" data-list="${l.id}" data-id="${m.id}" data-name="${esc(m.name)}">${esc(m.name)}</button>`).join("")
+    : `<p class="small muted">${q ? "Ninguém com esse nome (ou já está na lista)." : "Todo mundo que tem conta já está na lista."}</p>`}</div>
+  <details class="stack">
+    <summary class="small muted" style="cursor:pointer">Não tem conta? Colocar só o nome</summary>
+    <form data-form="addPerson" data-list="${l.id}" class="stack" style="margin-top:10px">
+      <label class="field">Nome<input id="pName" type="text" maxlength="40" required></label>
+      <button class="btn lg ghost" type="submit">Colocar na lista</button>
+    </form>
+  </details>`;
+}
+// busca ao digitar, sem perder o foco do campo
+document.addEventListener("input", (ev) => {
+  const t = ev.target; if (!t.dataset || !t.dataset.search) return;
+  const l = findList(t.dataset.search); if (!l) return;
+  const tmp = document.createElement("div"); tmp.innerHTML = addPersonSheet(l, t.value);
+  $("#pResults").replaceWith(tmp.querySelector("#pResults"));
+});
 
 // ---------- Pix copia e cola (padrão BR Code do Banco Central) ----------
 function crc16(s) {
@@ -665,6 +828,30 @@ const actions = {
   copyPix: (d) => { const l = findList(d.list); if (l) copy(l.pix_key, "Chave Pix copiada."); },
   copyPixCode: (d) => { const l = findList(d.list); if (l) copy(pixCode(l), "Pix copia e cola copiado. Cole no app do banco."); },
   addPerson: (d) => { const l = findList(d.list); if (l) openSheet(addPersonSheet(l)); },
+  addMember: async (d) => {
+    if (await run(sb.rpc("admin_add_member", { p_list: d.list, p_user: d.id }), d.name + " entrou na lista.")) {
+      const l = findList(d.list); entries[d.list] = [...(entries[d.list] || []), { id: "tmp-" + d.id, list_id: d.list, user_id: d.id, kind: "membro", name: d.name, created_at: new Date().toISOString() }];
+      if (l) $("#sheetBody").innerHTML = addPersonSheet(l, ($("#pSearch") || {}).value || "");
+    }
+  },
+  vote: (d) => {
+    const l = findList(d.list); if (!l) return;
+    const m = (votes[l.id] || {}).mine || {};
+    voteCat = (CATS.find((c) => !m[c.key]) || CATS[0]).key; // abre na primeira categoria que falta
+    openSheet(voteSheet(l));
+  },
+  voteCat: (d) => { const l = findList(d.list); voteCat = d.cat; if (l) $("#sheetBody").innerHTML = voteSheet(l); },
+  castVote: async (d) => {
+    const l = findList(d.list), e = findEntry(d.list, d.id); if (!l) return;
+    const r = await sb.rpc("cast_vote", { p_list: d.list, p_entry: d.id, p_category: d.cat });
+    if (r.error) return toast(errMsg(r.error));
+    const v = votes[d.list] = votes[d.list] || { mine: {}, results: {}, total: 0 };
+    v.mine = { ...v.mine, [d.cat]: d.id };
+    const next = CATS.find((c) => !v.mine[c.key]);
+    toast(`Voto em ${e ? e.name : "?"} registrado!`);
+    if (next) { voteCat = next.key; $("#sheetBody").innerHTML = voteSheet(l); } else { closeSheet(); }
+    render(); scheduleRefresh();
+  },
   teams: (d) => { const l = findList(d.list); if (l) { openSheet(teamsSheet(l)); openTeamsList = l.id; } },
   setTier: async (d) => {
     const key = d.key, t = Number(d.tier), prev = tiers[key];
@@ -711,7 +898,7 @@ const actions = {
   copy: (d) => { const l = findList(d.list); if (l) copy(whatsappText(l), "Lista copiada. Cole no grupo!"); },
   guest: (d) => { const l = findList(d.list); if (l) openSheet(guestSheet(l)); },
   row: (d) => { const l = findList(d.list), e = findEntry(d.list, d.id); if (l && e) openSheet(rowSheet(l, e)); },
-  me: () => openSheet(accountSheet()),
+  me: () => { openSheet(accountSheet()); if (!achievements) checkAchievements().then(() => { if (!$("#sheet").hidden) $("#sheetBody").innerHTML = accountSheet(); }); },
   newList: () => openSheet(listFormHtml(null)),
   editList: (d) => { const l = findList(d.id); if (l) openSheet(listFormHtml(l)); },
   repeatList: (d) => {

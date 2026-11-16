@@ -248,3 +248,108 @@ create table if not exists public.tiers (
 alter table public.tiers enable row level security;
 drop policy if exists "tier: so admin" on public.tiers;
 create policy "tier: so admin" on public.tiers for all to authenticated using (public.is_admin()) with check (public.is_admin());
+
+-- =====================================================================
+-- Parte 5: votação dos melhores do dia e conquistas.
+-- Categorias: mvp (melhor do dia), ataque, defesa, bloqueio.
+-- Abre na hora do jogo, fecha no dia seguinte às 23:59 (horário de Brasília).
+-- O placar só aparece depois que fecha (organizadores veem antes).
+-- =====================================================================
+create table if not exists public.votes (
+  list_id uuid not null references public.lists on delete cascade,
+  voter uuid not null references auth.users on delete cascade,
+  category text not null default 'mvp' check (category in ('mvp', 'ataque', 'defesa', 'bloqueio')),
+  entry_id uuid not null references public.entries on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (list_id, voter, category)
+);
+alter table public.votes enable row level security;
+drop policy if exists "voto: ver o meu" on public.votes;
+create policy "voto: ver o meu" on public.votes for select to authenticated using (voter = auth.uid() or public.is_admin());
+
+create or replace function public._vote_closes(l public.lists) returns timestamptz
+language sql stable as $$ select ((l.game_date + 1) + time '23:59:59') at time zone 'America/Sao_Paulo' $$;
+
+create or replace function public.cast_vote(p_list uuid, p_entry uuid, p_category text) returns void
+language plpgsql security definer set search_path = public as $$
+declare l lists; e entries;
+begin
+  if p_category not in ('mvp', 'ataque', 'defesa', 'bloqueio') then raise exception 'Categoria inválida.'; end if;
+  select * into l from lists where id = p_list;
+  if l.id is null then raise exception 'Lista não encontrada.'; end if;
+  if now() < ((l.game_date + l.start_time::time) at time zone 'America/Sao_Paulo') then raise exception 'A votação abre na hora do jogo.'; end if;
+  if now() > _vote_closes(l) then raise exception 'A votação já fechou.'; end if;
+  if not exists (select 1 from entries where list_id = p_list and user_id = auth.uid() and kind = 'membro') then
+    raise exception 'Só quem estava na lista pode votar.';
+  end if;
+  select * into e from entries where id = p_entry and list_id = p_list;
+  if e.id is null then raise exception 'Jogador não encontrado nessa lista.'; end if;
+  if e.kind = 'membro' and e.user_id = auth.uid() then raise exception 'Não vale votar em você mesmo.'; end if;
+  insert into votes (list_id, voter, category, entry_id) values (p_list, auth.uid(), p_category, p_entry)
+  on conflict (list_id, voter, category) do update set entry_id = excluded.entry_id, created_at = now();
+end $$;
+
+-- placar por categoria; com a votação aberta, só o total de quem votou (organizadores veem tudo)
+create or replace function public.vote_results(p_list uuid)
+returns table (category text, entry_id uuid, votes bigint, total_voters bigint, closed boolean)
+language plpgsql stable security definer set search_path = public as $$
+declare l lists; is_closed boolean; total bigint;
+begin
+  if not is_approved() then raise exception 'Sem acesso.'; end if;
+  select * into l from lists where id = p_list;
+  if l.id is null then return; end if;
+  is_closed := now() > _vote_closes(l);
+  select count(distinct v.voter) into total from votes v where v.list_id = p_list;
+  if is_closed or is_admin() then
+    return query select v.category, v.entry_id, count(*)::bigint, total, is_closed
+      from votes v where v.list_id = p_list group by v.category, v.entry_id order by 1, 3 desc;
+    if found then return; end if;
+  end if;
+  return query select null::text, null::uuid, 0::bigint, total, is_closed;
+end $$;
+
+-- conquistas de quem está logado: categorias vencidas (empate conta) e jogos jogados
+create or replace function public.my_achievements() returns jsonb
+language sql stable security definer set search_path = public as $$
+  with closed_lists as (select * from lists l where now() > _vote_closes(l)),
+  counts as (select v.list_id, v.category, v.entry_id, count(*) c from votes v join closed_lists cl on cl.id = v.list_id group by 1, 2, 3),
+  tops as (select list_id, category, max(c) m from counts group by 1, 2),
+  winners as (select c.list_id, c.category, c.entry_id from counts c join tops t using (list_id, category) where c.c = t.m)
+  select jsonb_build_object(
+    'wins', coalesce((select jsonb_agg(jsonb_build_object('category', w.category, 'date', l.game_date, 'title', l.title) order by l.game_date desc)
+      from winners w join entries e on e.id = w.entry_id join lists l on l.id = w.list_id
+      where e.user_id = auth.uid() and e.kind = 'membro'), '[]'::jsonb),
+    'games', (select count(*) from entries e join lists l on l.id = e.list_id
+      where e.user_id = auth.uid() and e.kind = 'membro' and l.game_date < (now() at time zone 'America/Sao_Paulo')::date)
+  )
+$$;
+
+revoke all on function public.cast_vote(uuid, uuid, text) from public, anon;
+revoke all on function public.vote_results(uuid) from public, anon;
+revoke all on function public.my_achievements() from public, anon;
+grant execute on function public.cast_vote(uuid, uuid, text) to authenticated;
+grant execute on function public.vote_results(uuid) to authenticated;
+grant execute on function public.my_achievements() to authenticated;
+
+-- =====================================================================
+-- Parte 6: organizador coloca na lista alguém que já tem conta.
+-- =====================================================================
+create or replace function public.admin_add_member(p_list uuid, p_user uuid) returns public.entries
+language plpgsql security definer set search_path = public as $$
+declare p profiles; l lists; e entries;
+begin
+  if not is_admin() then raise exception 'Só organizadores podem fazer isso.'; end if;
+  select * into l from lists where id = p_list;
+  if l.id is null then raise exception 'Lista não encontrada.'; end if;
+  select * into p from profiles where id = p_user;
+  if p.id is null or p.status <> 'approved' then raise exception 'Essa pessoa não está aprovada.'; end if;
+  begin
+    insert into entries (list_id, user_id, name, kind, is_setter)
+    values (p_list, p_user, p.name, 'membro', p.is_setter) returning * into e;
+  exception when unique_violation then
+    raise exception '% já está na lista (ou tem alguém com esse nome).', p.name;
+  end;
+  return e;
+end $$;
+revoke all on function public.admin_add_member(uuid, uuid) from public, anon;
+grant execute on function public.admin_add_member(uuid, uuid) to authenticated;
