@@ -111,7 +111,7 @@ async function refresh() {
         };
       }));
       votes = vnext;
-      await loadPolls();
+      await Promise.all([loadPolls(), loadCards()]);
       checkAchievements();
     }
     if (me && me.is_admin) {
@@ -326,7 +326,7 @@ function rowHtml(l, e, n, inMain) {
   const mineRow = e.user_id === uid();
   const can = mineRow || me.is_admin;
   const inner = `<span class="num">${n}</span>
-    <span class="who"><b>${esc(e.name)}${e.is_setter ? ` <span class="lev">LEV</span>` : ""}</b>${e.kind === "convidado" ? `<small>convidado de ${esc(e.invited_by)}</small>` : e.kind === "avulso" ? `<small>colocado por ${esc(e.invited_by)}</small>` : ""}</span>
+    <span class="who"><b>${esc(e.name)}${e.kind === "membro" ? posTag(e.user_id) : ""}${e.is_setter ? ` <span class="lev">LEV</span>` : ""}</b>${e.kind === "convidado" ? `<small>convidado de ${esc(e.invited_by)}</small>` : e.kind === "avulso" ? `<small>colocado por ${esc(e.invited_by)}</small>` : e.fixed ? `<small>mensalista</small>` : ""}</span>
     ${inMain ? pill(e.paid) : ""}${can ? `<span class="chev" aria-hidden="true">›</span>` : ""}`;
   return `<li class="${mineRow ? "mine" : ""}">${can
     ? `<button class="rowbtn" type="button" data-act="row" data-list="${l.id}" data-id="${e.id}" aria-label="Opções de ${esc(e.name)}">${inner}</button>`
@@ -387,6 +387,9 @@ function viewList(id) {
     <button class="btn ghost" data-act="teams" data-list="${l.id}">Sortear times</button>` : ""}
     <button class="btn ghost" data-act="pix" data-list="${l.id}">Pix ${money(l.price)}</button>
     <button class="btn ghost" data-act="copy" data-list="${l.id}">Copiar p/ WhatsApp</button>
+    ${isPast(l) ? "" : `<button class="btn ghost" data-act="calendar" data-list="${l.id}">Pôr no calendário</button>`}
+    <button class="btn ghost" data-act="log" data-list="${l.id}">Histórico</button>
+    ${me.is_admin && !isPast(l) ? `<button class="btn ghost" data-act="addMonthly" data-list="${l.id}">+ Mensalistas</button>` : ""}
     <a class="btn spotify" href="https://open.spotify.com/playlist/${PLAYLIST_ID}" target="_blank" rel="noopener">Playlist do racha</a>
   </div>`;
 }
@@ -448,11 +451,12 @@ function viewAdmin() {
   } else {
     const people = members.filter((m) => m.status !== "pending").sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
     body = `<ol class="rows card flush">${people.map((m) => `<li><div class="rowbtn plain">
-        <span class="who"><b>${esc(m.name)}</b>${realEmail(m.email) ? `<small>${esc(m.email)}</small>` : ""}${m.is_admin ? ` <span class="pill confirmed">admin</span>` : ""}${m.status === "rejected" ? ` <span class="pill no">bloqueado</span>` : ""}
+        <span class="who"><b>${esc(m.name)}</b>${realEmail(m.email) ? `<small>${esc(m.email)}</small>` : ""}${m.is_admin ? ` <span class="pill confirmed">admin</span>` : ""}${m.monthly ? ` <span class="pill informed">mensalista</span>` : ""}${m.status === "rejected" ? ` <span class="pill no">bloqueado</span>` : ""}
           ${m.status === "approved" ? tierPicker("u:" + m.id) : ""}</span>
         <span class="mini-acts">${m.id === uid() ? `<span class="small muted">você</span>` : `
           ${m.status === "approved"
             ? `<button class="btn sm ghost" data-act="setAdmin" data-id="${m.id}" data-val="${m.is_admin ? "0" : "1"}" ${m.is_admin ? 'data-confirm="Tirar admin?"' : ""}>${m.is_admin ? "Tirar admin" : "Tornar admin"}</button>
+               <button class="btn sm ghost" data-act="setMonthly" data-id="${m.id}" data-val="${m.monthly ? "0" : "1"}">${m.monthly ? "Tirar mensalista" : "Mensalista"}</button>
                <button class="btn sm ghost" data-act="resetPw" data-id="${m.id}" data-name="${esc(m.name)}" data-confirm="Gerar senha nova?">Resetar senha</button>
                <button class="btn sm ghost danger-txt" data-act="setStatus" data-id="${m.id}" data-status="rejected" data-confirm="Bloquear?">Bloquear</button>`
             : `<button class="btn sm" data-act="setStatus" data-id="${m.id}" data-status="approved">Aprovar</button>`}`}
@@ -535,6 +539,7 @@ function accountSheet() {
   const viaGoogle = ((session.user.app_metadata || {}).providers || []).includes("google");
   return `<h2 class="h2">${esc(me ? me.name : "Sua conta")}</h2>
   <p class="small muted">${viaGoogle ? "Entra com o Google" : "Usuário"}: ${esc(user)}${me && me.is_admin ? " · organizador" : ""}</p>
+  ${profileFormHtml()}
   ${medalsHtml()}
   ${isStandalone() ? "" : `<div class="stack">
     <button class="btn lg yellow" data-act="install">Instalar como app</button>
@@ -656,7 +661,7 @@ function viewRanking() {
   <p class="small muted center">Toque em alguém para ver as medalhas.</p>
   <ol class="rows card flush">${rows.map((p) => `<li class="${p.user_id === uid() ? "mine" : ""}"><button type="button" class="rowbtn rk-row" data-act="personMedals" data-id="${p.user_id}">
       <span class="num">${p.pos}</span>
-      <span class="who"><b>${esc(p.name)}</b><small>${plural(p.games, "jogo", "jogos")}${p.wins ? " · " + plural(p.wins, "vitória", "vitórias") : ""}</small></span>
+      <span class="who"><b>${esc(p.name)}</b><small>${posOf(cardOf(p.user_id).posicao) ? posOf(cardOf(p.user_id).posicao).name + " · " : ""}${plural(p.games, "jogo", "jogos")}${p.wins ? " · " + plural(p.wins, "vitória", "vitórias") : ""}</small></span>
       <span class="rk-badges">${badges(p)}</span>
       <span class="rk-count" title="medalhas de ${total}"><b>${p.medals}</b><small>/${total}</small></span>
     </button></li>`).join("")}</ol>`;
@@ -664,6 +669,7 @@ function viewRanking() {
 function personMedalsSheet(p) {
   const wins = MEDAL_KINDS.flatMap((c) => Array(p[c.key] || 0).fill({ category: c.key }));
   return `<h2 class="h2">${esc(p.name)}</h2>
+  <p class="small muted">${[cardOf(p.user_id).jersey ? "nº " + esc(cardOf(p.user_id).jersey) : "", posOf(cardOf(p.user_id).posicao) ? posOf(cardOf(p.user_id).posicao).name : "", cardOf(p.user_id).monthly ? "mensalista" : ""].filter(Boolean).join(" · ")}</p>
   <p class="small muted">${plural(p.games, "jogo", "jogos")} · ${plural(p.wins, "vitória", "vitórias")} nas votações</p>
   ${medalsHtml({ wins, games: p.games }, "Conquistas")}`;
 }
@@ -878,7 +884,7 @@ function teamsSection(l) {
     const st = TEAM_STYLES[i % TEAM_STYLES.length];
     const people = [t.setter, ...t.players].map((id, j) => {
       const e = byId[id];
-      return `<li>${e ? esc(e.name) : `<i class="muted">saiu da lista</i>`}${j === 0 ? ` <span class="lev">LEV</span>` : ""}</li>`;
+      return `<li>${e ? esc(e.name) + (e.kind === "membro" && j > 0 ? posTag(e.user_id) : "") : `<i class="muted">saiu da lista</i>`}${j === 0 ? ` <span class="lev">LEV</span>` : ""}</li>`;
     }).join("");
     const strength = me.is_admin ? [t.setter, ...t.players].reduce((s, id) => s + (byId[id] ? tierOf(byId[id]) : 0), 0) : 0;
     return `<div class="team ${st.cls}"><h3>${st.name}${me.is_admin ? `<small>força ${strength}</small>` : ""}</h3><ol>${people}</ol></div>`;
@@ -926,6 +932,60 @@ function teamsText(l) {
     [t.setter, ...t.players].forEach((id, j) => out.push(`${j + 1}. ${byId[id] ? byId[id].name : "?"}${j === 0 ? " (levantador)" : ""}`));
   });
   return out.join("\n");
+}
+
+// ---------- perfil do jogador, mensalistas, histórico e calendário ----------
+const POSITIONS = [
+  { key: "levantador", name: "Levantador", short: "LEV" }, { key: "ponteiro", name: "Ponteiro", short: "PON" },
+  { key: "oposto", name: "Oposto", short: "OPO" }, { key: "central", name: "Central", short: "CEN" },
+  { key: "libero", name: "Líbero", short: "LIB" }, { key: "coringa", name: "Coringa (joga em tudo)", short: "COR" },
+];
+const posOf = (k) => POSITIONS.find((p) => p.key === k);
+let cards = {}; // { [userId]: { posicao, jersey, monthly } }
+async function loadCards() {
+  const r = await sb.rpc("player_cards");
+  if (!r.error) cards = Object.fromEntries((r.data || []).map((c) => [c.user_id, c]));
+}
+const cardOf = (userId) => cards[userId] || {};
+function posTag(userId) {
+  const c = cardOf(userId), p = posOf(c.posicao);
+  return (c.jersey ? `<span class="jersey">${esc(c.jersey)}</span>` : "") + (p && p.key !== "levantador" ? ` <span class="ptag">${p.short}</span>` : "");
+}
+
+function profileFormHtml() {
+  const c = cardOf(uid());
+  return `<h3 class="h3">Meu perfil de jogador</h3>
+  <form data-form="myProfile" class="stack">
+    <div class="field">Posição<div class="kind-grid">${POSITIONS.map((p) => `<label class="kind-opt"><input type="radio" name="myPos" value="${p.key}" ${c.posicao === p.key ? "checked" : ""}><span>${p.name}</span></label>`).join("")}</div>
+      <small>Quem escolhe Levantador já fica marcado para o sorteio dos times.</small></div>
+    <label class="field">Número da camisa<input id="myJersey" type="text" inputmode="numeric" maxlength="3" value="${esc(c.jersey || "")}" placeholder="Ex.: 7"></label>
+    <button class="btn lg ghost" type="submit">Salvar perfil</button>
+  </form>`;
+}
+
+async function logSheet(l) {
+  openSheet(`<h2 class="h2">Histórico da lista</h2>${viewLoading()}`);
+  const r = await sb.rpc("list_log", { p_list: l.id });
+  if (r.error) { $("#sheetBody").innerHTML = `<h2 class="h2">Histórico da lista</h2><p class="muted">${esc(errMsg(r.error))}</p>`; return; }
+  const ev = r.data || [];
+  const fmt = (iso) => { const d = new Date(iso); return `${pad(d.getDate())}/${pad(d.getMonth() + 1)} ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`; };
+  $("#sheetBody").innerHTML = `<h2 class="h2">Histórico da lista</h2>
+  <p class="small muted">Quem entrou e saiu, na ordem, com a hora do servidor. Saídas só aparecem a partir de agora.</p>
+  ${ev.length ? `<ol class="log">${ev.map((x) => `<li class="${x.action === "saiu" ? "out" : "in"}"><time>${fmt(x.at)}</time>
+    <span><b>${esc(x.name)}</b> ${x.action}${x.kind === "convidado" && x.action === "saiu" ? " (convidado)" : ""}${x.note ? ` <small>· ${esc(x.note)}</small>` : ""}</span></li>`).join("")}</ol>` : `<p class="muted">Nada ainda.</p>`}`;
+}
+
+// arquivo .ics: abre o "adicionar evento" do celular
+function icsFor(l) {
+  const t = (time, date = l.game_date) => new Date(`${date}T${(time || "16:00").slice(0, 5)}:00-03:00`).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const url = location.origin + location.pathname + "#l-" + l.id;
+  const escI = (x) => String(x).replace(/([,;\\])/g, "\\$1");
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Racha Criativo//PT-BR", "CALSCALE:GREGORIAN", "BEGIN:VEVENT",
+    "UID:" + l.id + "@racha-criativo", "DTSTAMP:" + new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, ""),
+    "DTSTART:" + t(l.start_time), "DTEND:" + t(l.end_time || l.start_time), "SUMMARY:" + escI("🏐 " + l.title),
+    "DESCRIPTION:" + escI("Lista e Pix: " + url), "URL:" + url,
+    "BEGIN:VALARM", "TRIGGER:-PT2H", "ACTION:DISPLAY", "DESCRIPTION:" + escI("Vôlei hoje! " + l.title), "END:VALARM",
+    "END:VEVENT", "END:VCALENDAR"].join("\r\n");
 }
 
 // ---------- placar e rodízio (vencedor fica, perdedor vai para o fim da fila) ----------
@@ -1269,6 +1329,21 @@ const actions = {
     }
   },
   newPoll: () => openSheet(pollFormHtml()),
+  log: (d) => { const l = findList(d.list); if (l) logSheet(l); },
+  calendar: (d) => {
+    const l = findList(d.list); if (!l) return;
+    const blob = new Blob([icsFor(l)], { type: "text/calendar;charset=utf-8" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "racha-" + l.game_date + ".ics";
+    document.body.appendChild(a); a.click(); a.remove();
+    toast("Abra o arquivo para pôr no calendário (com lembrete 2h antes).");
+  },
+  addMonthly: async (d) => {
+    const r = await sb.rpc("admin_add_monthly", { p_list: d.list });
+    if (r.error) return toast(errMsg(r.error));
+    toast(r.data ? plural(Number(r.data), "mensalista entrou", "mensalistas entraram") + " na lista." : "Todos os mensalistas já estão na lista (ou ninguém é mensalista ainda).");
+    scheduleRefresh();
+  },
+  setMonthly: (d) => run(sb.from("profiles").update({ monthly: d.val === "1" }).eq("id", d.id), d.val === "1" ? "Agora é mensalista: entra sozinho nas próximas listas." : "Não é mais mensalista."),
   pt: (d) => { const sc = liveScore(d.list); sc[d.side] = Math.min(99, sc[d.side] + 1); saveLive(d.list, sc); render(); },
   ptMinus: (d) => { const sc = liveScore(d.list); sc[d.side] = Math.max(0, sc[d.side] - 1); saveLive(d.list, sc); render(); },
   endSet: async (d) => {
@@ -1422,6 +1497,14 @@ const forms = {
   async guest(f) {
     const name = clean($("#gName").value);
     if (await run(sb.rpc("add_guest", { p_list: f.dataset.list, p_name: name }), "Convidado adicionado.")) closeSheet();
+  },
+  async myProfile(f) {
+    const pos = (f.querySelector("input[name=myPos]:checked") || {}).value || "";
+    const jersey = $("#myJersey").value.replace(/\D/g, "").slice(0, 3);
+    const r = await sb.rpc("set_my_profile", { p_position: pos, p_jersey: jersey });
+    if (r.error) return toast(errMsg(r.error));
+    cards[uid()] = { ...cardOf(uid()), posicao: pos || null, jersey: jersey || null };
+    toast("Perfil salvo."); closeSheet(); scheduleRefresh();
   },
   async cash(f) {
     const kind = (f.querySelector("input[name=cKind]:checked") || {}).value || "out";

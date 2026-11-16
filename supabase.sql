@@ -676,3 +676,117 @@ do $$ begin
   begin alter publication supabase_realtime add table public.matches; exception when duplicate_object then null; end;
   begin alter publication supabase_realtime add table public.cash; exception when duplicate_object then null; end;
 end $$;
+
+-- =====================================================================
+-- Parte 10: mensalistas, perfil do jogador (posição/número) e histórico da lista.
+-- =====================================================================
+alter table public.profiles add column if not exists monthly boolean not null default false;
+alter table public.profiles add column if not exists posicao text;
+alter table public.profiles add column if not exists jersey text;
+do $$ begin
+  alter table public.profiles add constraint profiles_posicao_check
+    check (posicao is null or posicao in ('levantador', 'ponteiro', 'oposto', 'central', 'libero', 'coringa'));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.profiles add constraint profiles_jersey_check check (jersey is null or char_length(jersey) <= 3);
+exception when duplicate_object then null; end $$;
+alter table public.entries add column if not exists fixed boolean not null default false;
+alter table public.drops add column if not exists in_main boolean not null default true;
+alter table public.drops add column if not exists kind text;
+alter table public.drops add column if not exists removed_by text;
+
+-- registra toda saída (espera e convidados também); "em cima da hora" só para quem estava nas vagas
+create or replace function public.log_drop() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare l lists; pos bigint; starts timestamptz; inside boolean; who text;
+begin
+  select * into l from lists where id = old.list_id;
+  if l.id is null then return old; end if; -- a lista inteira foi apagada
+  select count(*) into pos from entries e
+    where e.list_id = old.list_id and e.kind <> 'convidado' and (e.created_at, e.id) < (old.created_at, old.id);
+  inside := old.kind <> 'convidado' and pos < l.spots;
+  starts := (l.game_date + l.start_time::time) at time zone 'America/Sao_Paulo';
+  select name into who from profiles where id = auth.uid() and id is distinct from old.user_id;
+  insert into drops (list_id, user_id, name, kind, in_main, removed_by, late, by_admin)
+  values (old.list_id, case when old.kind = 'convidado' then null else old.user_id end, old.name, old.kind, inside, who,
+          inside and old.kind = 'membro' and now() between starts - interval '24 hours' and starts + interval '3 hours',
+          public.is_admin() and old.user_id is distinct from auth.uid());
+  return old;
+end $$;
+
+-- mensalistas entram sozinhos em toda lista nova
+create or replace function public.add_monthly() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into entries (list_id, user_id, name, kind, is_setter, fixed)
+  select new.id, p.id, p.name, 'membro', p.is_setter, true
+  from profiles p where p.monthly and p.status = 'approved'
+  order by p.name limit new.spots
+  on conflict do nothing;
+  return new;
+end $$;
+drop trigger if exists on_list_created on public.lists;
+create trigger on_list_created after insert on public.lists for each row execute function public.add_monthly();
+
+-- organizador coloca os mensalistas numa lista que já existia
+create or replace function public.admin_add_monthly(p_list uuid) returns int
+language plpgsql security definer set search_path = public as $$
+declare n int;
+begin
+  if not is_admin() then raise exception 'Só organizadores podem fazer isso.'; end if;
+  insert into entries (list_id, user_id, name, kind, is_setter, fixed)
+  select p_list, p.id, p.name, 'membro', p.is_setter, true
+  from profiles p where p.monthly and p.status = 'approved'
+    and not exists (select 1 from entries e where e.list_id = p_list and e.user_id = p.id and e.kind = 'membro')
+  order by p.name
+  on conflict do nothing;
+  get diagnostics n = row_count;
+  return n;
+end $$;
+
+-- cada um escolhe a própria posição e número
+create or replace function public.set_my_profile(p_position text, p_jersey text) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if p_position is not null and p_position <> '' and p_position not in ('levantador', 'ponteiro', 'oposto', 'central', 'libero', 'coringa') then
+    raise exception 'Posição inválida.';
+  end if;
+  update profiles set posicao = nullif(p_position, ''),
+    jersey = nullif(left(trim(coalesce(p_jersey, '')), 3), ''),
+    is_setter = case when p_position = 'levantador' then true else is_setter end
+  where id = auth.uid();
+end $$;
+
+-- posição e número de todo mundo aprovado
+create or replace function public.player_cards()
+returns table (user_id uuid, name text, posicao text, jersey text, monthly boolean)
+language sql stable security definer set search_path = public as $$
+  select p.id, p.name, p.posicao, p.jersey, p.monthly from profiles p
+  where p.status = 'approved' and public.is_approved()
+$$;
+
+-- histórico da lista: quem entrou e quem saiu, com horário
+create or replace function public.list_log(p_list uuid)
+returns table (at timestamptz, name text, action text, kind text, note text)
+language sql stable security definer set search_path = public as $$
+  select * from (
+    select e.created_at, e.name, 'entrou'::text, e.kind,
+      case when e.fixed then 'mensalista' when e.kind = 'avulso' then 'colocado por ' || coalesce(e.invited_by, 'organizador')
+           when e.kind = 'convidado' then 'convidado de ' || coalesce(e.invited_by, '?') end
+    from entries e where e.list_id = p_list
+    union all
+    select d.dropped_at, d.name, 'saiu'::text, coalesce(d.kind, 'membro'),
+      case when d.removed_by is not null then 'tirado por ' || d.removed_by end
+    from drops d where d.list_id = p_list
+  ) x where public.is_approved()
+  order by 1
+$$;
+
+revoke all on function public.admin_add_monthly(uuid) from public, anon;
+revoke all on function public.set_my_profile(text, text) from public, anon;
+revoke all on function public.player_cards() from public, anon;
+revoke all on function public.list_log(uuid) from public, anon;
+grant execute on function public.admin_add_monthly(uuid) to authenticated;
+grant execute on function public.set_my_profile(text, text) to authenticated;
+grant execute on function public.player_cards() to authenticated;
+grant execute on function public.list_log(uuid) to authenticated;
