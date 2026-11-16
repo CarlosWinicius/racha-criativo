@@ -262,7 +262,8 @@ function viewList(id) {
   const paidCount = main.filter((e) => e.paid === "confirmed").length;
   let notice = "";
   if (isPast(l)) notice = `<div class="notice">Esse jogo já passou.</div>`;
-  else if (!isOpen(l)) notice = `<div class="notice warn">A lista abre ${esc(fmtOpen(l.opens_at))}<span class="cd" data-cd="${l.opens_at}"></span></div>`;
+  else if (!isOpen(l)) notice = `<div class="notice warn">A lista abre ${esc(fmtOpen(l.opens_at))}<span class="cd" data-cd="${l.opens_at}"></span></div>
+    <img class="meme-wide" src="img/diabo.jpg" alt="Meme: o grupo do racha quando soltam a lista" onerror="this.remove()">`;
   else if (mine && mine.where === "main") notice = `<div class="notice ok">Você é o <b>nº ${mine.n}</b> da lista.</div>`;
   else if (mine) notice = `<div class="notice warn">Você é o <b>nº ${mine.n}</b> da espera. Se alguém sair, você sobe sozinho.</div>`;
   else if (main.length >= spots) notice = `<div class="notice">Lista lotada. Se entrar agora, você vai para a espera.</div>`;
