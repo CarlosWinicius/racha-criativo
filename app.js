@@ -363,6 +363,7 @@ function viewList(id) {
     <button class="btn ghost" data-act="teams" data-list="${l.id}">Sortear times</button>` : ""}
     <button class="btn ghost" data-act="pix" data-list="${l.id}">Pix ${money(l.price)}</button>
     <button class="btn ghost" data-act="copy" data-list="${l.id}">Copiar p/ WhatsApp</button>
+    <a class="btn spotify" href="https://open.spotify.com/playlist/${PLAYLIST_ID}" target="_blank" rel="noopener">Playlist do racha</a>
   </div>`;
 }
 
@@ -620,12 +621,19 @@ function viewRanking() {
       <span class="rk-medal" aria-hidden="true">${["🥇", "🥈", "🥉"][p.pos - 1] || "🏅"}</span>
       <b>${esc(p.name)}</b><small>${plural(p.medals, "medalha", "medalhas")}</small><span class="rk-badges">${badges(p)}</span>
     </div>`).join("")}</div>` : `<div class="empty card"><h2 class="h2">Ninguém pontuou ainda</h2><p class="muted">As medalhas aparecem depois do primeiro jogo e da primeira votação.</p></div>`}
-  <ol class="rows card flush">${rows.map((p) => `<li class="${p.user_id === uid() ? "mine" : ""}"><div class="rowbtn rk-row">
+  <p class="small muted center">Toque em alguém para ver as medalhas.</p>
+  <ol class="rows card flush">${rows.map((p) => `<li class="${p.user_id === uid() ? "mine" : ""}"><button type="button" class="rowbtn rk-row" data-act="personMedals" data-id="${p.user_id}">
       <span class="num">${p.pos}</span>
       <span class="who"><b>${esc(p.name)}</b><small>${plural(p.games, "jogo", "jogos")}${p.wins ? " · " + plural(p.wins, "vitória", "vitórias") : ""}</small></span>
       <span class="rk-badges">${badges(p)}</span>
       <span class="rk-count" title="medalhas de ${total}"><b>${p.medals}</b><small>/${total}</small></span>
-    </div></li>`).join("")}</ol>`;
+    </button></li>`).join("")}</ol>`;
+}
+function personMedalsSheet(p) {
+  const wins = CATS.flatMap((c) => Array(p[c.key] || 0).fill({ category: c.key }));
+  return `<h2 class="h2">${esc(p.name)}</h2>
+  <p class="small muted">${plural(p.games, "jogo", "jogos")} · ${plural(p.wins, "vitória", "vitórias")} nas votações</p>
+  ${medalsHtml({ wins, games: p.games }, "Conquistas")}`;
 }
 
 async function checkAchievements() {
@@ -640,10 +648,10 @@ async function checkAchievements() {
   }
   try { localStorage.setItem("racha-medals-" + uid(), JSON.stringify(got)); } catch {}
 }
-function medalsHtml() {
-  if (!achievements) return `<p class="small muted">Carregando conquistas…</p>`;
-  const ms = medalsFrom(achievements), n = ms.filter((m) => m.got).length;
-  return `<h3 class="h3">Minhas conquistas <small>${n} de ${ms.length}</small></h3>
+function medalsHtml(a = achievements, title = "Minhas conquistas") {
+  if (!a) return `<p class="small muted">Carregando conquistas…</p>`;
+  const ms = medalsFrom(a), n = ms.filter((m) => m.got).length;
+  return `<h3 class="h3">${title} <small>${n} de ${ms.length}</small></h3>
   <div class="medals">${ms.map((m) => `<div class="medal ${m.got ? "got" : ""} ${m.gold ? "gold" : ""}" title="${esc(m.sub)}"><span class="m-icon" aria-hidden="true">${m.icon}</span><b>${esc(m.name)}</b><small>${esc(m.sub)}</small></div>`).join("")}</div>`;
 }
 
@@ -877,6 +885,7 @@ const actions = {
       if (l) $("#sheetBody").innerHTML = addPersonSheet(l, ($("#pSearch") || {}).value || "");
     }
   },
+  personMedals: (d) => { const p = (rankingRows || []).find((x) => x.user_id === d.id); if (p) openSheet(personMedalsSheet(p)); },
   vote: (d) => {
     const l = findList(d.list); if (!l) return;
     const m = (votes[l.id] || {}).mine || {};
