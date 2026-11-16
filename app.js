@@ -48,6 +48,8 @@ function errMsg(e) {
 let session = null, me = null, meLoaded = false;
 let lists = [], listsLoaded = false, entries = {}, members = [];
 let votes = {}; // { [listId]: { mine, results: [{entry_id, votes}], total, closed } }
+let polls = [], pollMine = {}, pollRes = {}, pollWins = []; // votações por tipo
+let googleOn = false; // login com Google ligado no Supabase?
 let tiers = {}; // só para admins: { "u:<pessoa>": 1..3, "e:<inscrição>": 1..3 }
 let route = parseRoute(), authTab = "login", adminTab = "lists";
 let channel = null;
@@ -57,10 +59,12 @@ function parseRoute() {
   if (h.startsWith("l-")) return { name: "list", id: h.slice(2) };
   if (h === "admin") return { name: "admin" };
   if (h === "ranking") return { name: "ranking" };
+  if (h.startsWith("p-")) return { name: "poll", id: h.slice(2) };
   return { name: "home" };
 }
 const uid = () => session && session.user.id;
 const approved = () => me && (me.status === "approved" || me.is_admin);
+const realEmail = (e) => (e && !e.endsWith("@" + EMAIL_DOMAIN) ? e : "");
 
 // ---------- dados ----------
 async function refresh() {
@@ -99,6 +103,7 @@ async function refresh() {
         };
       }));
       votes = vnext;
+      await loadPolls();
       checkAchievements();
     }
     if (me && me.is_admin) {
@@ -108,7 +113,7 @@ async function refresh() {
       if (!t.error) tiers = Object.fromEntries((t.data || []).map((x) => [x.key, x.tier]));
     }
   } catch (e) { toast(errMsg(e)); }
-  if (route.name === "ranking" && approved()) loadRanking();
+  if ((route.name === "ranking" || route.name === "poll") && approved()) loadRanking();
   render();
 }
 let refreshTimer;
@@ -120,6 +125,7 @@ function startRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "entries" }, scheduleRefresh)
     .on("postgres_changes", { event: "*", schema: "public", table: "lists" }, scheduleRefresh)
     .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, scheduleRefresh)
+    .on("postgres_changes", { event: "*", schema: "public", table: "polls" }, scheduleRefresh)
     .subscribe();
 }
 function stopRealtime() { if (channel) { sb.removeChannel(channel); channel = null; } }
@@ -173,6 +179,7 @@ function render() {
   else if (route.name === "admin") html = me.is_admin ? viewAdmin() : viewHome();
   else if (route.name === "list") html = viewList(route.id);
   else if (route.name === "ranking") html = viewRanking();
+  else if (route.name === "poll") html = viewPoll(route.id);
   else html = viewHome();
   $("#app").innerHTML = html;
 
@@ -204,19 +211,21 @@ function viewAuth() {
     <p>Entre na lista do jogo, veja sua posição e pague pelo Pix.</p>
   </section>
   <section class="card">
+    ${googleOn ? `<button class="btn lg google" data-act="google"><svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.2 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20 20-8.9 20-20c0-1.3-.1-2.4-.4-3.5z"/><path fill="#FF3D00" d="m6.3 14.7 6.6 4.8C14.7 15.1 19 12 24 12c3.1 0 5.8 1.2 7.9 3.1l5.7-5.7C34 6.1 29.3 4 24 4 16.3 4 9.7 8.3 6.3 14.7z"/><path fill="#4CAF50" d="M24 44c5.2 0 9.9-2 13.4-5.2l-6.2-5.2C29.2 35.1 26.7 36 24 36c-5.2 0-9.6-3.3-11.3-8l-6.5 5C9.5 39.6 16.2 44 24 44z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.2-4.1 5.6l6.2 5.2C37 39.2 44 34 44 24c0-1.3-.1-2.4-.4-3.5z"/></svg>Entrar com Google</button>
+    <div class="or"><span>ou</span></div>` : ""}
     <div class="seg" role="tablist">
       <button role="tab" class="${login ? "on" : ""}" data-act="authTab" data-tab="login">Entrar</button>
       <button role="tab" class="${!login ? "on" : ""}" data-act="authTab" data-tab="signup">Criar conta</button>
     </div>
     ${login ? `
     <form data-form="login" class="stack">
-      <label class="field">Usuário<input id="lUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="seu apelido"></label>
+      <label class="field">Usuário ou e-mail<input id="lUser" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="seu apelido ou e-mail"></label>
       <label class="field">Senha<input id="lPass" type="password" autocomplete="current-password" required></label>
       <button class="btn lg" type="submit">Entrar</button>
     </form>` : `
     <form data-form="signup" class="stack">
       <label class="field">Seu nome na lista<input id="sName" type="text" maxlength="40" required placeholder="Ex.: Carlos" autocomplete="nickname"></label>
-      <label class="field">Usuário<input id="sUser" type="text" maxlength="24" required placeholder="Ex.: carlos.vb" autocapitalize="none" spellcheck="false" autocomplete="username"><small>Só letras, números, ponto e traço. Você usa para entrar.</small></label>
+      <label class="field">Usuário ou e-mail<input id="sUser" type="text" maxlength="80" required placeholder="Ex.: carlos.vb ou seu@email.com" autocapitalize="none" spellcheck="false" autocomplete="username"><small>Um apelido (letras, números, ponto e traço) ou o seu e-mail. Você usa para entrar.</small></label>
       <label class="field">Senha<input id="sPass" type="password" minlength="6" required autocomplete="new-password"><small>Pelo menos 6 caracteres.</small></label>
       <div class="notice warn"><b>Não use uma senha de verdade.</b> Nada de senha do e-mail, banco ou Instagram. Crie uma senha só para o vôlei.</div>
       <button class="btn lg" type="submit">Criar conta</button>
@@ -417,14 +426,14 @@ function viewAdmin() {
     }).join("")}</div>` : `<p class="muted center">Nenhuma lista ainda.</p>`}`;
   } else if (adminTab === "requests") {
     body = pending.length ? `<ol class="rows card flush">${pending.map((m) => `<li><div class="rowbtn plain">
-        <span class="who"><b>${esc(m.name)}</b><small>pediu ${new Date(m.created_at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></span>
+        <span class="who"><b>${esc(m.name)}</b><small>${realEmail(m.email) ? esc(m.email) + " · " : ""}pediu ${new Date(m.created_at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</small></span>
         <span class="mini-acts"><button class="btn sm" data-act="setStatus" data-id="${m.id}" data-status="approved">Aprovar</button>
         <button class="btn sm ghost" data-act="setStatus" data-id="${m.id}" data-status="rejected" data-confirm="Recusar?">Recusar</button></span>
       </div></li>`).join("")}</ol>` : `<div class="empty card"><h2 class="h2">Nenhum pedido novo</h2><p class="muted">Quando alguém criar conta, aparece aqui para você aprovar.</p></div>`;
   } else {
     const people = members.filter((m) => m.status !== "pending").sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
     body = `<ol class="rows card flush">${people.map((m) => `<li><div class="rowbtn plain">
-        <span class="who"><b>${esc(m.name)}</b>${m.is_admin ? ` <span class="pill confirmed">admin</span>` : ""}${m.status === "rejected" ? ` <span class="pill no">bloqueado</span>` : ""}
+        <span class="who"><b>${esc(m.name)}</b>${realEmail(m.email) ? `<small>${esc(m.email)}</small>` : ""}${m.is_admin ? ` <span class="pill confirmed">admin</span>` : ""}${m.status === "rejected" ? ` <span class="pill no">bloqueado</span>` : ""}
           ${m.status === "approved" ? tierPicker("u:" + m.id) : ""}</span>
         <span class="mini-acts">${m.id === uid() ? `<span class="small muted">você</span>` : `
           ${m.status === "approved"
@@ -508,8 +517,9 @@ const guestSheet = (l) => `<h2 class="h2">Levar convidado</h2>
 
 function accountSheet() {
   const user = session.user.email.endsWith("@" + EMAIL_DOMAIN) ? session.user.email.split("@")[0] : session.user.email;
+  const viaGoogle = ((session.user.app_metadata || {}).providers || []).includes("google");
   return `<h2 class="h2">${esc(me ? me.name : "Sua conta")}</h2>
-  <p class="small muted">Usuário: ${esc(user)}${me && me.is_admin ? " · organizador" : ""}</p>
+  <p class="small muted">${viaGoogle ? "Entra com o Google" : "Usuário"}: ${esc(user)}${me && me.is_admin ? " · organizador" : ""}</p>
   ${medalsHtml()}
   ${isStandalone() ? "" : `<div class="stack">
     <button class="btn lg yellow" data-act="install">Instalar como app</button>
@@ -579,11 +589,16 @@ function voteSheet(l) {
 
 // ---------- conquistas (estilo Hevy) ----------
 const GAME_MILESTONES = [1, 5, 10, 25, 50];
+const MEDAL_KINDS = [...CATS,
+  { key: "levantador", name: "Melhor levantador", icon: "🙌" }, { key: "passe", name: "Melhor passe", icon: "🎯" },
+  { key: "saque", name: "Melhor saque", icon: "🚀" }, { key: "time", name: "Melhor time", icon: "👥" },
+  { key: "outro", name: "Eleito na votação", icon: "⭐" }];
+const pollWinsFor = (id) => pollWins.filter((w) => w.user_id === id).map((w) => ({ category: w.kind, date: w.closes_at, title: w.title }));
 let achievements = null; // { wins: [{category, date, title}], games }
 function medalsFrom(a) {
   const out = [];
   GAME_MILESTONES.forEach((n) => out.push({ id: "games-" + n, icon: "🏐", name: n === 1 ? "Primeiro racha" : `${n} rachas`, got: a.games >= n, sub: n === 1 ? "Jogou o primeiro" : `Jogou ${n} vezes` }));
-  CATS.forEach((c) => {
+  MEDAL_KINDS.forEach((c) => {
     const k = a.wins.filter((w) => w.category === c.key).length;
     out.push({ id: c.key + "-1", icon: c.icon, name: c.name, got: k >= 1, sub: k ? `Ganhou ${plural(k, "vez", "vezes")}` : "Ganhe uma votação" });
     out.push({ id: c.key + "-5", icon: c.icon, name: c.name + " ×5", got: k >= 5, sub: "Ganhe 5 vezes", gold: true });
@@ -594,17 +609,18 @@ function medalsFrom(a) {
 // ---------- ranking ----------
 let rankingRows = null; // [{ user_id, name, games, mvp, ataque, defesa, bloqueio, medals, wins }]
 async function loadRanking() {
-  const r = await sb.rpc("ranking");
+  const [r, pw] = await Promise.all([sb.rpc("ranking"), sb.rpc("poll_wins")]);
   if (r.error) { toast(errMsg(r.error)); rankingRows = []; render(); return; }
+  if (!pw.error) pollWins = pw.data || [];
   rankingRows = (r.data || []).map((p) => {
-    const counts = Object.fromEntries(CATS.map((c) => [c.key, Number(p[c.key]) || 0]));
-    const wins = CATS.flatMap((c) => Array(counts[c.key]).fill({ category: c.key }));
+    const counts = Object.fromEntries(MEDAL_KINDS.map((c) => [c.key, (Number(p[c.key]) || 0) + pollWins.filter((w) => w.user_id === p.user_id && w.kind === c.key).length]));
+    const wins = MEDAL_KINDS.flatMap((c) => Array(counts[c.key]).fill({ category: c.key }));
     return { ...p, ...counts, games: Number(p.games) || 0, wins: wins.length, medals: medalsFrom({ wins, games: Number(p.games) || 0 }).filter((m) => m.got).length };
   }).sort((a, b) => b.medals - a.medals || b.wins - a.wins || b.games - a.games || a.name.localeCompare(b.name, "pt-BR"));
   if (route.name === "ranking") render();
 }
 function viewRanking() {
-  if (!rankingRows) return `<section class="intro"><span class="eyebrow">Conquistas</span><h1 class="title">Ranking</h1></section>${viewLoading()}`;
+  if (!rankingRows) return `<section class="intro"><span class="eyebrow">Conquistas</span><h1 class="title">Ranking</h1></section>${pollsSection()}${viewLoading()}`;
   const total = medalsFrom({ wins: [], games: 0 }).length;
   // posição com empate (mesmas medalhas, vitórias e jogos = mesma posição)
   let pos = 0;
@@ -613,10 +629,11 @@ function viewRanking() {
     if (!prev || prev.medals !== p.medals || prev.wins !== p.wins || prev.games !== p.games) pos = i + 1;
     return { ...p, pos };
   });
-  const badges = (p) => CATS.filter((c) => p[c.key]).map((c) => `<span class="rk-b" title="${c.name}">${c.icon}${p[c.key] > 1 ? p[c.key] : ""}</span>`).join("");
+  const badges = (p) => MEDAL_KINDS.filter((c) => p[c.key]).map((c) => `<span class="rk-b" title="${c.name}">${c.icon}${p[c.key] > 1 ? p[c.key] : ""}</span>`).join("");
   const podium = rows.slice(0, 3).filter((p) => p.medals > 0);
   return `<section class="intro"><span class="eyebrow">Conquistas</span><h1 class="title">Ranking</h1>
     <p class="small muted">Quem tem mais medalhas fica na frente. Empate: mais vitórias nas votações, depois mais jogos.</p></section>
+  ${pollsSection()}
   ${podium.length ? `<div class="rk-podium">${podium.map((p) => `<div class="rk-p rk-${p.pos} ${p.user_id === uid() ? "me" : ""}">
       <span class="rk-medal" aria-hidden="true">${["🥇", "🥈", "🥉"][p.pos - 1] || "🏅"}</span>
       <b>${esc(p.name)}</b><small>${plural(p.medals, "medalha", "medalhas")}</small><span class="rk-badges">${badges(p)}</span>
@@ -630,16 +647,147 @@ function viewRanking() {
     </button></li>`).join("")}</ol>`;
 }
 function personMedalsSheet(p) {
-  const wins = CATS.flatMap((c) => Array(p[c.key] || 0).fill({ category: c.key }));
+  const wins = MEDAL_KINDS.flatMap((c) => Array(p[c.key] || 0).fill({ category: c.key }));
   return `<h2 class="h2">${esc(p.name)}</h2>
   <p class="small muted">${plural(p.games, "jogo", "jogos")} · ${plural(p.wins, "vitória", "vitórias")} nas votações</p>
   ${medalsHtml({ wins, games: p.games }, "Conquistas")}`;
 }
 
+// ---------- votações por tipo (link para o grupo) ----------
+const POLL_KINDS = [
+  { key: "mvp", name: "Melhor jogador", icon: "🏆" },
+  { key: "ataque", name: "Melhor ataque", icon: "💥" },
+  { key: "levantador", name: "Melhor levantador", icon: "🙌" },
+  { key: "bloqueio", name: "Melhor bloqueio", icon: "🧱" },
+  { key: "passe", name: "Melhor passe", icon: "🎯" },
+  { key: "defesa", name: "Melhor defesa", icon: "🧤" },
+  { key: "saque", name: "Melhor saque", icon: "🚀" },
+  { key: "time", name: "Melhor time", icon: "👥" },
+  { key: "outro", name: "Outra", icon: "⭐" },
+];
+const pollKind = (k) => POLL_KINDS.find((x) => x.key === k) || POLL_KINDS[POLL_KINDS.length - 1];
+const pollOpen = (p) => Date.now() <= new Date(p.closes_at).getTime();
+const pollUrl = (p) => location.origin + location.pathname + "#p-" + p.id;
+const findPoll = (id) => polls.find((x) => x.id === id);
+const fmtWhen = (iso) => { const d = new Date(iso); return `${WD3[d.getDay()]}, ${pad(d.getDate())}/${pad(d.getMonth() + 1)} às ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+let pollQ = "";
+
+async function loadPolls() {
+  const since = new Date(Date.now() - 30 * 864e5).toISOString();
+  const r = await sb.from("polls").select("*").gte("closes_at", since).order("created_at", { ascending: false });
+  if (r.error) { polls = []; return; } // tabela ainda não criada
+  polls = r.data || [];
+  const [m] = await Promise.all([
+    sb.from("poll_votes").select("poll_id,target").eq("voter", uid()),
+    ...polls.map(async (p) => {
+      const x = await sb.rpc("poll_results", { p_poll: p.id });
+      const rows = x.data || [];
+      pollRes[p.id] = { rows: rows.filter((y) => y.target).map((y) => ({ target: y.target, votes: Number(y.votes) })), total: rows.length ? Number(rows[0].total_voters) : 0 };
+    }),
+  ]);
+  pollMine = Object.fromEntries(((m && m.data) || []).map((x) => [x.poll_id, x.target]));
+}
+
+// candidatos: times do jogo, quem jogou naquele jogo, ou todo mundo aprovado
+function pollCands(p) {
+  const l = p.list_id && findList(p.list_id);
+  if (p.kind === "time") {
+    if (!l || !Array.isArray(l.teams)) return [];
+    const byId = Object.fromEntries((entries[l.id] || []).map((e) => [e.id, e]));
+    return l.teams.map((t, i) => ({ id: "team:" + i, name: TEAM_STYLES[i % TEAM_STYLES.length].name, sub: [t.setter, ...t.players].map((id) => (byId[id] ? byId[id].name : "?")).join(", ") }));
+  }
+  if (l) return ordered(l).main.filter((e) => e.kind === "membro").map((e) => ({ id: e.user_id, name: e.name }));
+  return (rankingRows || []).map((r) => ({ id: r.user_id, name: r.name })).sort((a, b) => a.name.localeCompare(b.name, "pt-BR"));
+}
+function pollName(p, target) {
+  const c = pollCands(p).find((x) => x.id === target);
+  if (c) return c.name;
+  const r = (rankingRows || []).find((x) => x.user_id === target);
+  return r ? r.name : "?";
+}
+function pollWinnersOf(p) {
+  const rs = (pollRes[p.id] || {}).rows || [];
+  return rs.length ? rs.filter((r) => r.votes === rs[0].votes) : [];
+}
+
+function pollsSection() {
+  const list = polls.slice(0, 12);
+  if (!list.length && !me.is_admin) return "";
+  return `<section class="card polls">
+    <h2 class="h2">Votações <small>escolha os melhores</small></h2>
+    ${list.length ? `<ul class="poll-list">${list.map((p) => {
+      const k = pollKind(p.kind), open = pollOpen(p), w = open ? [] : pollWinnersOf(p);
+      const status = open ? (pollMine[p.id] ? `<span class="chip ok">você votou</span>` : `<span class="chip me">votar</span>`)
+        : `<span class="small muted pw">${w.length ? "🏆 " + w.map((r) => esc(pollName(p, r.target))).join(" e ") : "sem votos"}</span>`;
+      return `<li><a href="#p-${p.id}" class="poll-item"><span class="pk-icon" aria-hidden="true">${k.icon}</span>
+        <span class="who"><b>${esc(p.title)}</b><small>${open ? "fecha " + esc(fmtWhen(p.closes_at)) : "encerrada"}</small></span>${status}</a></li>`;
+    }).join("")}</ul>` : `<p class="small muted">Nenhuma votação ainda. Crie uma e mande o link no grupo.</p>`}
+    ${me.is_admin ? `<button class="btn yellow" data-act="newPoll">+ Nova votação</button>` : ""}
+  </section>`;
+}
+
+function viewPoll(id) {
+  const p = findPoll(id);
+  if (!p) return listsLoaded ? `<div class="empty"><h1 class="title">Votação não encontrada</h1><p class="muted">Ela pode ter sido apagada ou já é antiga.</p><a class="btn ghost" href="#ranking">Ver votações</a></div>` : viewLoading();
+  const k = pollKind(p.kind), open = pollOpen(p), res = pollRes[p.id] || { rows: [], total: 0 };
+  const l = p.list_id && findList(p.list_id);
+  const mine = pollMine[p.id];
+  const norm = (s) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const cands = pollCands(p).filter((c) => c.id !== uid());
+  const shown = cands.filter((c) => !pollQ || norm(c.name).includes(norm(pollQ)));
+  const head = `<section class="intro"><span class="eyebrow">${k.icon} Votação${l ? " · " + esc(l.title) + " " + pad(parseDate(l.game_date).getDate()) + "/" + pad(parseDate(l.game_date).getMonth() + 1) : ""}</span>
+    <h1 class="title">${esc(p.title)}</h1>
+    <p class="small muted">${open ? "Fecha " + esc(fmtWhen(p.closes_at)) + ". O resultado aparece quando fechar." : "Encerrada " + esc(fmtWhen(p.closes_at)) + "."} ${plural(res.total, "pessoa votou", "pessoas votaram")}.</p></section>`;
+  const share = `<div class="tools"><button class="btn ghost" data-act="sharePoll" data-id="${p.id}">Copiar link p/ WhatsApp</button>
+    ${me.is_admin && open ? `<button class="btn ghost" data-act="closePoll" data-id="${p.id}" data-confirm="Encerrar agora?">Encerrar agora</button>` : ""}
+    ${me.is_admin ? `<button class="btn ghost danger-txt" data-act="deletePoll" data-id="${p.id}" data-confirm="Apagar votação?">Apagar</button>` : ""}</div>`;
+  const bars = (rows) => { const max = rows.length ? rows[0].votes : 1; return `<ul class="poll-bars">${rows.map((r) => `<li class="${r.votes === rows[0].votes ? "win" : ""}"><span class="pb-name">${esc(pollName(p, r.target))}</span><span class="pb-bar"><i style="width:${Math.round((r.votes / max) * 100)}%"></i></span><b>${r.votes}</b></li>`).join("")}</ul>`; };
+  if (!open) {
+    const w = pollWinnersOf(p);
+    return `${head}<section class="card mvp done">
+      ${w.length ? `<div class="trophy" aria-hidden="true">${k.icon}</div><span class="eyebrow">${w.length > 1 ? "Empate!" : "Vencedor"}</span>
+      <h2 class="mvp-name">${w.map((r) => esc(pollName(p, r.target))).join(" e ")}</h2>
+      <p class="small muted">${plural(w[0].votes, "voto", "votos")}</p>` : `<p class="muted">Ninguém votou.</p>`}
+      ${res.rows.length > 1 ? bars(res.rows) : ""}
+    </section>${share}`;
+  }
+  return `${head}
+  <section class="card">
+    ${mine ? `<div class="notice ok">Seu voto: <b>${esc(pollName(p, mine))}</b>. Dá para trocar até fechar. Ninguém vê em quem você votou.</div>` : `<p class="small muted">Toque em ${p.kind === "time" ? "um time" : "um nome"} para votar. Ninguém vê em quem você votou.</p>`}
+    ${p.kind === "time" || cands.length < 10 ? "" : `<label class="field">Buscar<input id="pollSearch" type="search" value="${esc(pollQ)}" placeholder="Nome" autocomplete="off" data-pollsearch="${p.id}"></label>`}
+    <div class="vote-grid ${p.kind === "time" ? "teams-vote" : ""}" id="pollGrid">${shown.length ? shown.map((c) => `<button type="button" class="vote-opt ${mine === c.id ? "on" : ""}" data-act="castPoll" data-id="${p.id}" data-target="${c.id}">${esc(c.name)}${c.sub ? `<small>${esc(c.sub)}</small>` : ""}</button>`).join("")
+      : `<p class="small muted">${p.kind === "time" ? "Os times desse jogo ainda não foram sorteados." : pollQ ? "Ninguém com esse nome." : "Carregando…"}</p>`}</div>
+    ${me.is_admin && res.rows.length ? `<h3 class="h3">Parcial <small>só organizadores</small></h3>${bars(res.rows)}` : ""}
+  </section>${share}`;
+}
+document.addEventListener("input", (ev) => {
+  const t = ev.target; if (!t.dataset || !t.dataset.pollsearch) return;
+  pollQ = t.value;
+  const tmp = document.createElement("div"); tmp.innerHTML = viewPoll(t.dataset.pollsearch);
+  const g = tmp.querySelector("#pollGrid"); if (g) $("#pollGrid").replaceWith(g);
+});
+
+function pollFormHtml() {
+  const d = addDays(new Date(), 2); d.setHours(23, 59, 0, 0);
+  const games = lists.filter((l) => (entries[l.id] || []).length).slice().reverse();
+  return `<h2 class="h2">Nova votação</h2>
+  <p class="small muted">Depois de criar, o link é copiado. Cole no grupo e a galera vota pelo site.</p>
+  <form data-form="poll" class="stack">
+    <div class="field">Tipo<div class="kind-grid">${POLL_KINDS.map((k, i) => `<label class="kind-opt"><input type="radio" name="pKind" value="${k.key}" ${i === 0 ? "checked" : ""}><span>${k.icon} ${k.name}</span></label>`).join("")}</div></div>
+    <label class="field">Título<input id="pTitle" type="text" maxlength="60" placeholder="Ex.: Melhor levantador de novembro"><small>Se deixar vazio, usa o nome do tipo.</small></label>
+    <label class="field">Quem pode ser votado
+      <select id="pList"><option value="">Todo mundo que tem conta</option>${games.map((l) => `<option value="${l.id}">Quem jogou ${esc(l.title)} ${pad(parseDate(l.game_date).getDate())}/${pad(parseDate(l.game_date).getMonth() + 1)}${Array.isArray(l.teams) && l.teams.length ? " (tem times)" : ""}</option>`).join("")}</select>
+      <small>Para <b>Melhor time</b>, escolha um jogo que já teve sorteio de times.</small></label>
+    <label class="field">Fecha em<input id="pCloses" type="datetime-local" required value="${toLocalInput(d.toISOString())}"></label>
+    <button class="btn lg yellow" type="submit">Criar e copiar link</button>
+  </form>`;
+}
+
 async function checkAchievements() {
-  const r = await sb.rpc("my_achievements");
+  const [r, pw] = await Promise.all([sb.rpc("my_achievements"), sb.rpc("poll_wins")]);
   if (r.error || !r.data) return;
-  achievements = r.data;
+  if (!pw.error) pollWins = pw.data || [];
+  achievements = { ...r.data, wins: [...(r.data.wins || []), ...pollWinsFor(uid())] };
   const got = medalsFrom(achievements).filter((m) => m.got).map((m) => m.id);
   let seen = null; try { seen = JSON.parse(localStorage.getItem("racha-medals-" + uid())); } catch {}
   if (seen) {
@@ -846,6 +994,10 @@ function whatsappText(l) {
   out.push("", "Entre pelo site: " + location.origin + location.pathname + "#l-" + l.id);
   return out.join("\n");
 }
+function pollShareText(p) {
+  const k = pollKind(p.kind);
+  return `${k.icon} VOTAÇÃO: ${p.title.toUpperCase()}\nVote aqui: ${pollUrl(p)}\nFecha ${fmtWhen(p.closes_at)}`;
+}
 async function copy(text, ok) {
   try { await navigator.clipboard.writeText(text); toast(ok); }
   catch {
@@ -869,6 +1021,11 @@ async function run(promise, okMsg) {
 
 const actions = {
   authTab: (d) => { authTab = d.tab; render(); },
+  google: async () => {
+    try { sessionStorage.setItem("racha-after-login", location.hash); } catch {}
+    const { error } = await sb.auth.signInWithOAuth({ provider: "google", options: { redirectTo: location.origin + location.pathname } });
+    if (error) toast(errMsg(error));
+  },
   adminTab: (d) => { adminTab = d.tab; render(); },
   logout: async () => { closeSheet(); await sb.auth.signOut(); location.hash = ""; },
   join: (d) => run(sb.rpc("join_list", { p_list: d.list }), "Você entrou!"),
@@ -884,6 +1041,20 @@ const actions = {
       const l = findList(d.list); entries[d.list] = [...(entries[d.list] || []), { id: "tmp-" + d.id, list_id: d.list, user_id: d.id, kind: "membro", name: d.name, created_at: new Date().toISOString() }];
       if (l) $("#sheetBody").innerHTML = addPersonSheet(l, ($("#pSearch") || {}).value || "");
     }
+  },
+  newPoll: () => openSheet(pollFormHtml()),
+  sharePoll: (d) => { const p = findPoll(d.id); if (p) copy(pollShareText(p), "Link copiado. Cole no grupo!"); },
+  closePoll: (d) => run(sb.from("polls").update({ closes_at: new Date().toISOString() }).eq("id", d.id), "Votação encerrada."),
+  deletePoll: async (d) => { if (await run(sb.from("polls").delete().eq("id", d.id), "Votação apagada.")) location.hash = "ranking"; },
+  castPoll: async (d) => {
+    const p = findPoll(d.id); if (!p) return;
+    const r = await sb.rpc("cast_poll_vote", { p_poll: p.id, p_target: d.target });
+    if (r.error) return toast(errMsg(r.error));
+    const first = !pollMine[p.id];
+    pollMine[p.id] = d.target;
+    if (first && pollRes[p.id]) pollRes[p.id].total++;
+    toast(`Voto em ${pollName(p, d.target)} registrado!`);
+    render(); scheduleRefresh();
   },
   personMedals: (d) => { const p = (rankingRows || []).find((x) => x.user_id === d.id); if (p) openSheet(personMedalsSheet(p)); },
   vote: (d) => {
@@ -971,7 +1142,7 @@ const forms = {
   },
   async signup(f) {
     const name = clean($("#sName").value), user = $("#sUser").value.trim(), password = $("#sPass").value;
-    if (!/^[a-zA-Z0-9._-]{3,24}$/.test(user)) return toast("Usuário: de 3 a 24 caracteres, só letras, números, ponto e traço.");
+    if (user.includes("@") ? !/^[^s@]+@[^s@]+.[^s@]+$/.test(user) : !/^[a-zA-Z0-9._-]{3,24}$/.test(user)) return toast(user.includes("@") ? "Confira o e-mail." : "Usuário: de 3 a 24 caracteres, só letras, números, ponto e traço.");
     if (password.length < 6) return toast("A senha precisa ter pelo menos 6 caracteres.");
     const { data, error } = await sb.auth.signUp({ email: userToEmail(user), password, options: { data: { name } } });
     if (error) return toast(errMsg(error));
@@ -991,6 +1162,22 @@ const forms = {
   async guest(f) {
     const name = clean($("#gName").value);
     if (await run(sb.rpc("add_guest", { p_list: f.dataset.list, p_name: name }), "Convidado adicionado.")) closeSheet();
+  },
+  async poll(f) {
+    const kind = (f.querySelector("input[name=pKind]:checked") || {}).value || "mvp";
+    const list_id = $("#pList").value || null;
+    const l = list_id && findList(list_id);
+    if (kind === "time" && !(l && Array.isArray(l.teams) && l.teams.length)) return toast("Para Melhor time, escolha um jogo que já teve sorteio de times.");
+    const closes = $("#pCloses").value;
+    if (!closes || new Date(closes).getTime() <= Date.now()) return toast("A data de fechar precisa ser no futuro.");
+    let title = clean($("#pTitle").value);
+    if (!title) title = kind === "outro" ? "" : pollKind(kind).name + (l ? " · " + pad(parseDate(l.game_date).getDate()) + "/" + pad(parseDate(l.game_date).getMonth() + 1) : "");
+    if (title.length < 2) return toast("Dê um título para a votação.");
+    const r = await sb.from("polls").insert({ kind, title: title.slice(0, 60), list_id, closes_at: new Date(closes).toISOString() }).select().maybeSingle();
+    if (r.error) return toast(errMsg(r.error));
+    const p = r.data;
+    if (p) { polls = [p, ...polls]; pollRes[p.id] = { rows: [], total: 0 }; await copy(pollShareText(p), "Votação criada! Link copiado, cole no grupo."); location.hash = "p-" + p.id; }
+    closeSheet(); scheduleRefresh();
   },
   async list(f) {
     const opens = $("#fOpens").value;
@@ -1027,7 +1214,7 @@ document.addEventListener("submit", async (ev) => {
   try { await forms[f.dataset.form](f); } catch (e) { toast(errMsg(e)); } finally { if (b && b.isConnected) b.disabled = false; }
 });
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("#sheet").hidden) closeSheet(); });
-window.addEventListener("hashchange", () => { route = parseRoute(); closeSheet(); render(); window.scrollTo(0, 0); if (route.name === "ranking") loadRanking(); });
+window.addEventListener("hashchange", () => { route = parseRoute(); closeSheet(); render(); window.scrollTo(0, 0); if (route.name === "ranking" || route.name === "poll") loadRanking(); });
 $("#backBtn").addEventListener("click", () => { location.hash = ""; });
 $("#meBtn").addEventListener("click", () => actions.me());
 
@@ -1053,6 +1240,10 @@ setInterval(() => { tick(); if (needsRedraw) { needsRedraw = false; render(); } 
   session = undefined; $("#app").innerHTML = viewLoading();
   const { data } = await sb.auth.getSession();
   session = data.session || null;
+  let back = null; try { back = sessionStorage.getItem("racha-after-login"); sessionStorage.removeItem("racha-after-login"); } catch {}
+  if (session && back && back.length > 1 && !/access_token|error/.test(back)) { location.hash = back; route = parseRoute(); }
+  fetch(CONF.supabaseUrl + "/auth/v1/settings", { headers: { apikey: CONF.supabaseKey } }).then((r) => r.json())
+    .then((x) => { googleOn = !!(x && x.external && x.external.google); if (!session) render(); }).catch(() => {});
   sb.auth.onAuthStateChange((_ev, s) => {
     const changed = (s && s.user.id) !== (session && session.user.id);
     session = s || null;

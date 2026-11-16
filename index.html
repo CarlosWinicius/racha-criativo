@@ -116,11 +116,11 @@ main {
 /* campos: 16px evita o zoom automático do iPhone */
 .field { display: grid; gap: 6px; font-size: 13px; font-weight: 600; color: var(--muted); }
 .field small { font-weight: 400; }
-.field input {
+.field input, .field select {
   font-size: 16px; color: var(--fg); height: 50px; padding: 0 14px; width: 100%; min-width: 0;
   border: 1px solid var(--border); border-radius: 12px; background: var(--bg);
 }
-.field input:focus { border-color: var(--court); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--court) 25%, transparent); }
+.field input:focus, .field select:focus { border-color: var(--court); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--court) 25%, transparent); }
 :focus-visible { outline: 3px solid var(--line); outline-offset: 2px; }
 
 /* botões */
@@ -259,6 +259,32 @@ main {
 .extras { max-width: 560px; margin: -18px auto 0; padding-block: 0 32px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 .playlist { gap: 10px; }
 .playlist iframe { width: 100%; height: 152px; border: 0; border-radius: 12px; display: block; background: var(--bg2); }
+.btn.google { background: #fff; color: #1f1f1f; border: 1px solid #dadce0; gap: 10px; }
+.or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .1em; }
+.or::before, .or::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.poll-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.poll-item { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border); text-decoration: none; color: var(--fg); background: var(--bg2); }
+.poll-item .who b { display: block; overflow-wrap: anywhere; }
+.poll-item .who small { color: var(--muted); font-size: 12px; }
+.poll-item .pw { max-width: 120px; text-align: right; overflow-wrap: anywhere; }
+.pk-icon { font-size: 22px; text-align: center; }
+.poll-bars { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; text-align: left; }
+.poll-bars li { display: grid; grid-template-columns: minmax(0, 1fr) 2fr 28px; gap: 10px; align-items: center; font-size: 14px; }
+.pb-name { overflow-wrap: anywhere; }
+.pb-bar { height: 10px; border-radius: 99px; background: var(--bg2); overflow: hidden; }
+.pb-bar i { display: block; height: 100%; border-radius: 99px; background: var(--court); }
+.poll-bars li.win .pb-bar i { background: var(--line); }
+.poll-bars b { text-align: right; }
+.kind-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.kind-opt { position: relative; }
+.kind-opt input { position: absolute; opacity: 0; pointer-events: none; }
+.kind-opt span { display: block; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--border); background: var(--card); color: var(--fg); font-weight: 600; font-size: 14px; cursor: pointer; }
+.kind-opt input:checked + span { background: var(--line); border-color: var(--line); color: #1a1400; }
+.kind-opt input:focus-visible + span { outline: 2px solid var(--court); outline-offset: 2px; }
+.vote-opt small { display: block; font-weight: 400; font-size: 12px; color: var(--muted); margin-top: 4px; }
+.vote-opt.on small { color: #3a3100; }
+.teams-vote { grid-template-columns: 1fr; }
+select { font: inherit; }
 .btn.spotify { background: #1db954; color: #08210f; }
 /* times do dia */
 .admin-cta { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
@@ -416,6 +442,6 @@ li.free span:last-child { border: 1.5px dashed var(--border); border-radius: 10p
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="config.js?v=1794799932502"></script>
-<script src="app.js?v=1794799932502"></script>
+<script src="app.js?v=1794800483690"></script>
 </body>
 </html>

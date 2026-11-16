@@ -377,3 +377,125 @@ language sql stable security definer set search_path = public as $$
 $$;
 revoke all on function public.ranking() from public, anon;
 grant execute on function public.ranking() to authenticated;
+
+-- =====================================================================
+-- Parte 8: e-mail no perfil (login com Google) + votações por tipo.
+-- =====================================================================
+alter table public.profiles add column if not exists email text;
+update public.profiles p set email = u.email from auth.users u where u.id = p.id and p.email is null;
+
+create or replace function public.handle_new_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into profiles (id, name, email)
+  values (new.id, left(coalesce(nullif(trim(coalesce(new.raw_user_meta_data ->> 'name', new.raw_user_meta_data ->> 'full_name')), ''), split_part(new.email, '@', 1)), 40), new.email)
+  on conflict (id) do nothing;
+  return new;
+end $$;
+
+create table if not exists public.polls (
+  id uuid primary key default gen_random_uuid(),
+  kind text not null check (kind in ('mvp','ataque','levantador','defesa','bloqueio','passe','saque','time','outro')),
+  title text not null check (char_length(title) between 2 and 60),
+  list_id uuid references public.lists(id) on delete set null,
+  closes_at timestamptz not null,
+  created_by uuid default auth.uid() references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create table if not exists public.poll_votes (
+  poll_id uuid not null references public.polls(id) on delete cascade,
+  voter uuid not null references public.profiles(id) on delete cascade,
+  target text not null,
+  created_at timestamptz not null default now(),
+  primary key (poll_id, voter)
+);
+alter table public.polls enable row level security;
+alter table public.poll_votes enable row level security;
+drop policy if exists "votação: ver" on public.polls;
+drop policy if exists "votação: admin cria" on public.polls;
+drop policy if exists "votação: admin altera" on public.polls;
+drop policy if exists "votação: admin apaga" on public.polls;
+drop policy if exists "voto da votação: ver o meu" on public.poll_votes;
+create policy "votação: ver" on public.polls for select to authenticated using (public.is_approved());
+create policy "votação: admin cria" on public.polls for insert to authenticated with check (public.is_admin());
+create policy "votação: admin altera" on public.polls for update to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy "votação: admin apaga" on public.polls for delete to authenticated using (public.is_admin());
+create policy "voto da votação: ver o meu" on public.poll_votes for select to authenticated using (voter = auth.uid());
+
+-- votar (ou trocar o voto) enquanto a votação está aberta
+create or replace function public.cast_poll_vote(p_poll uuid, p_target text) returns void
+language plpgsql security definer set search_path = public as $$
+declare p polls; l lists; n int;
+begin
+  if not is_approved() then raise exception 'Sem acesso.'; end if;
+  select * into p from polls where id = p_poll;
+  if p.id is null then raise exception 'Votação não encontrada.'; end if;
+  if now() > p.closes_at then raise exception 'A votação já fechou.'; end if;
+  if p.kind = 'time' then
+    select * into l from lists where id = p.list_id;
+    n := coalesce(jsonb_array_length(l.teams), 0);
+    if p_target !~ '^team:[0-9]{1,3}$' then raise exception 'Time não encontrado.'; end if;
+    if substr(p_target, 6)::int >= n then raise exception 'Time não encontrado.'; end if;
+  else
+    if p_target = auth.uid()::text then raise exception 'Não vale votar em você mesmo.'; end if;
+    if not exists (select 1 from profiles where id::text = p_target and status = 'approved') then raise exception 'Pessoa não encontrada.'; end if;
+    if p.list_id is not null and not exists (select 1 from entries where list_id = p.list_id and user_id::text = p_target and kind = 'membro') then
+      raise exception 'Essa pessoa não estava nesse jogo.';
+    end if;
+  end if;
+  insert into poll_votes (poll_id, voter, target) values (p_poll, auth.uid(), p_target)
+  on conflict (poll_id, voter) do update set target = excluded.target, created_at = now();
+end $$;
+
+-- placar; com a votação aberta, só o total (organizadores veem tudo)
+create or replace function public.poll_results(p_poll uuid)
+returns table (target text, votes bigint, total_voters bigint, closed boolean)
+language plpgsql stable security definer set search_path = public as $$
+declare p polls; is_closed boolean; total bigint;
+begin
+  if not is_approved() then raise exception 'Sem acesso.'; end if;
+  select * into p from polls where id = p_poll;
+  if p.id is null then return; end if;
+  is_closed := now() > p.closes_at;
+  select count(*) into total from poll_votes v where v.poll_id = p_poll;
+  if is_closed or is_admin() then
+    return query select v.target, count(*)::bigint, total, is_closed
+      from poll_votes v where v.poll_id = p_poll group by v.target order by 2 desc;
+    if found then return; end if;
+  end if;
+  return query select null::text, 0::bigint, total, is_closed;
+end $$;
+
+-- quem ganhou cada votação encerrada (empate conta; "melhor time" vale para todo mundo do time)
+create or replace function public.poll_wins()
+returns table (user_id uuid, kind text, title text, poll_id uuid, closes_at timestamptz)
+language sql stable security definer set search_path = public as $$
+  with cp as (select * from polls p where now() > p.closes_at),
+  counts as (select v.poll_id, v.target, count(*) c from poll_votes v join cp on cp.id = v.poll_id group by 1, 2),
+  tops as (select poll_id, max(c) m from counts group by 1),
+  winners as (select c.poll_id, c.target from counts c join tops t using (poll_id) where c.c = t.m),
+  people as (
+    select w.poll_id, pr.id as uid from winners w join profiles pr on pr.id::text = w.target
+    union
+    select w.poll_id, e.user_id from winners w
+      join cp on cp.id = w.poll_id
+      join lists l on l.id = cp.list_id
+      cross join lateral jsonb_array_elements(case when jsonb_typeof(l.teams) = 'array' then l.teams else '[]'::jsonb end) with ordinality as t(team, idx)
+      cross join lateral (select t.team ->> 'setter' as eid union all select jsonb_array_elements_text(t.team -> 'players')) ids
+      join entries e on e.id::text = ids.eid and e.kind = 'membro'
+      where w.target = 'team:' || (t.idx - 1)
+  )
+  select pp.uid, cp.kind, cp.title, cp.id, cp.closes_at from people pp join cp on cp.id = pp.poll_id
+  where public.is_approved()
+$$;
+
+revoke all on function public.cast_poll_vote(uuid, text) from public, anon;
+revoke all on function public.poll_results(uuid) from public, anon;
+revoke all on function public.poll_wins() from public, anon;
+grant execute on function public.cast_poll_vote(uuid, text) to authenticated;
+grant execute on function public.poll_results(uuid) to authenticated;
+grant execute on function public.poll_wins() to authenticated;
+
+do $$ begin
+  begin alter publication supabase_realtime add table public.polls; exception when duplicate_object then null; end;
+end $$;
