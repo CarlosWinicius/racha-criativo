@@ -19,7 +19,7 @@ Sem configurar o Firebase o site roda em **modo teste** (dados só no seu navega
 
 1. Entre em https://console.firebase.google.com e crie um projeto (pode desligar o Google Analytics).
 2. **Authentication** > Começar > aba **Método de login** > ative **Anônimo**.
-3. **Authentication** > **Configurações** > **Domínios autorizados** > adicione `SEU-USUARIO.github.io`.
+3. **Authentication** > **Configurações** > **Domínios autorizados** > adicione `www.wita.com.br` (o domínio onde o site está publicado).
 4. **Firestore Database** > Criar banco de dados > modo de produção > região `southamerica-east1` (São Paulo).
 5. **Firestore** > aba **Regras** > apague tudo, cole o conteúdo de `firestore.rules` e clique **Publicar**.
 6. **Firestore** > aba **Dados** > crie a coleção `secret`, documento com ID `admin`, campo `pin` (tipo string) com o PIN dos organizadores. Esse PIN nunca aparece no site.
