@@ -232,6 +232,29 @@ main {
 .vote-opt { min-height: 52px; padding: 8px 12px; border-radius: 12px; border: 1.5px solid var(--border); background: var(--card); font-weight: 600; font-size: 15px; cursor: pointer; overflow-wrap: anywhere; }
 .vote-opt:active { transform: scale(.97); }
 .vote-opt.on { background: var(--line); border-color: var(--line); color: #1a1400; }
+/* ranking */
+.rank-link { display: grid; grid-template-columns: 32px minmax(0, 1fr) 16px; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 14px; text-decoration: none; background: var(--card); border: 1px solid var(--border); box-shadow: var(--shadow); }
+.rank-link > span:first-child { font-size: 26px; text-align: center; }
+.rank-link b { display: block; font: 700 18px/1.1 var(--display); text-transform: uppercase; letter-spacing: .04em; }
+.rank-link small { color: var(--muted); font-size: 13px; }
+.rk-podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; align-items: end; }
+.rk-p { display: grid; justify-items: center; text-align: center; gap: 2px; padding: 12px 6px; border-radius: 16px; background: var(--card); border: 1px solid var(--border); min-width: 0; }
+.rk-p b { font: 700 17px/1.1 var(--display); text-transform: uppercase; overflow-wrap: anywhere; }
+.rk-p small { font-size: 12px; color: var(--muted); }
+.rk-p.rk-1 { order: 2; padding-block: 20px; background: color-mix(in srgb, var(--line) 22%, var(--card)); border-color: var(--line); }
+.rk-p.rk-2 { order: 1; }
+.rk-p.rk-3 { order: 3; }
+.rk-p.me { outline: 2px solid var(--court); }
+.rk-medal { font-size: 34px; line-height: 1; }
+.rk-1 .rk-medal { font-size: 44px; }
+.rk-badges { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
+.rk-b { font-size: 13px; padding: 2px 6px; border-radius: 99px; background: var(--bg2); white-space: nowrap; }
+.rk-row { grid-template-columns: 28px minmax(0, 1fr) auto auto; }
+.rk-row .rk-badges { justify-content: flex-end; max-width: 120px; }
+.rk-count { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rk-count b { font: 800 22px/1 var(--display); }
+.rk-count small { color: var(--muted); font-size: 12px; }
+@media (max-width: 380px) { .rk-row .rk-badges { display: none; } }
 /* playlist */
 .extras { max-width: 560px; margin: -18px auto 0; padding-block: 0 32px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
 .playlist { gap: 10px; }
@@ -392,7 +415,7 @@ li.free span:last-child { border: 1.5px dashed var(--border); border-radius: 10p
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="config.js?v=1794799469391"></script>
-<script src="app.js?v=1794799469391"></script>
+<script src="config.js?v=1794799697648"></script>
+<script src="app.js?v=1794799697648"></script>
 </body>
 </html>

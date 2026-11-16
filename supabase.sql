@@ -353,3 +353,27 @@ begin
 end $$;
 revoke all on function public.admin_add_member(uuid, uuid) from public, anon;
 grant execute on function public.admin_add_member(uuid, uuid) to authenticated;
+
+-- =====================================================================
+-- Parte 7: ranking (conquistas de todo mundo aprovado).
+-- =====================================================================
+create or replace function public.ranking()
+returns table (user_id uuid, name text, games bigint, mvp bigint, ataque bigint, defesa bigint, bloqueio bigint)
+language sql stable security definer set search_path = public as $$
+  with closed_lists as (select * from lists l where now() > _vote_closes(l)),
+  counts as (select v.list_id, v.category, v.entry_id, count(*) c from votes v join closed_lists cl on cl.id = v.list_id group by 1, 2, 3),
+  tops as (select list_id, category, max(c) m from counts group by 1, 2),
+  winners as (select c.list_id, c.category, c.entry_id from counts c join tops t using (list_id, category) where c.c = t.m),
+  w as (select e.user_id, wn.category from winners wn join entries e on e.id = wn.entry_id where e.kind = 'membro'),
+  g as (select e.user_id, count(*) games from entries e join lists l on l.id = e.list_id
+        where e.kind = 'membro' and l.game_date < (now() at time zone 'America/Sao_Paulo')::date group by 1)
+  select p.id, p.name, coalesce(g.games, 0),
+    (select count(*) from w where w.user_id = p.id and w.category = 'mvp'),
+    (select count(*) from w where w.user_id = p.id and w.category = 'ataque'),
+    (select count(*) from w where w.user_id = p.id and w.category = 'defesa'),
+    (select count(*) from w where w.user_id = p.id and w.category = 'bloqueio')
+  from profiles p left join g on g.user_id = p.id
+  where p.status = 'approved' and public.is_approved()
+$$;
+revoke all on function public.ranking() from public, anon;
+grant execute on function public.ranking() to authenticated;

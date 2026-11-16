@@ -56,6 +56,7 @@ function parseRoute() {
   const h = location.hash.slice(1);
   if (h.startsWith("l-")) return { name: "list", id: h.slice(2) };
   if (h === "admin") return { name: "admin" };
+  if (h === "ranking") return { name: "ranking" };
   return { name: "home" };
 }
 const uid = () => session && session.user.id;
@@ -107,6 +108,7 @@ async function refresh() {
       if (!t.error) tiers = Object.fromEntries((t.data || []).map((x) => [x.key, x.tier]));
     }
   } catch (e) { toast(errMsg(e)); }
+  if (route.name === "ranking" && approved()) loadRanking();
   render();
 }
 let refreshTimer;
@@ -170,6 +172,7 @@ function render() {
   else if (!approved()) html = viewPending();
   else if (route.name === "admin") html = me.is_admin ? viewAdmin() : viewHome();
   else if (route.name === "list") html = viewList(route.id);
+  else if (route.name === "ranking") html = viewRanking();
   else html = viewHome();
   $("#app").innerHTML = html;
 
@@ -273,6 +276,7 @@ function viewHome() {
     <span class="eyebrow">Olá, ${esc(me.name)}</span>
     <h1 class="title">Próximos jogos</h1>
   </section>
+  <a class="rank-link" href="#ranking"><span aria-hidden="true">🏅</span><span><b>Ranking</b><small>Quem tem mais conquistas no racha</small></span><span class="chev" aria-hidden="true">›</span></a>
   ${up.length ? `<div class="games">${cards}</div>` : `
   <div class="empty card">
     <figure class="meme"><img src="img/meme.png" alt="Meme rindo"><figcaption>Sem vôlei essa semana?</figcaption></figure>
@@ -585,6 +589,45 @@ function medalsFrom(a) {
   });
   return out;
 }
+
+// ---------- ranking ----------
+let rankingRows = null; // [{ user_id, name, games, mvp, ataque, defesa, bloqueio, medals, wins }]
+async function loadRanking() {
+  const r = await sb.rpc("ranking");
+  if (r.error) { toast(errMsg(r.error)); rankingRows = []; render(); return; }
+  rankingRows = (r.data || []).map((p) => {
+    const counts = Object.fromEntries(CATS.map((c) => [c.key, Number(p[c.key]) || 0]));
+    const wins = CATS.flatMap((c) => Array(counts[c.key]).fill({ category: c.key }));
+    return { ...p, ...counts, games: Number(p.games) || 0, wins: wins.length, medals: medalsFrom({ wins, games: Number(p.games) || 0 }).filter((m) => m.got).length };
+  }).sort((a, b) => b.medals - a.medals || b.wins - a.wins || b.games - a.games || a.name.localeCompare(b.name, "pt-BR"));
+  if (route.name === "ranking") render();
+}
+function viewRanking() {
+  if (!rankingRows) return `<section class="intro"><span class="eyebrow">Conquistas</span><h1 class="title">Ranking</h1></section>${viewLoading()}`;
+  const total = medalsFrom({ wins: [], games: 0 }).length;
+  // posição com empate (mesmas medalhas, vitórias e jogos = mesma posição)
+  let pos = 0;
+  const rows = rankingRows.map((p, i) => {
+    const prev = rankingRows[i - 1];
+    if (!prev || prev.medals !== p.medals || prev.wins !== p.wins || prev.games !== p.games) pos = i + 1;
+    return { ...p, pos };
+  });
+  const badges = (p) => CATS.filter((c) => p[c.key]).map((c) => `<span class="rk-b" title="${c.name}">${c.icon}${p[c.key] > 1 ? p[c.key] : ""}</span>`).join("");
+  const podium = rows.slice(0, 3).filter((p) => p.medals > 0);
+  return `<section class="intro"><span class="eyebrow">Conquistas</span><h1 class="title">Ranking</h1>
+    <p class="small muted">Quem tem mais medalhas fica na frente. Empate: mais vitórias nas votações, depois mais jogos.</p></section>
+  ${podium.length ? `<div class="rk-podium">${podium.map((p) => `<div class="rk-p rk-${p.pos} ${p.user_id === uid() ? "me" : ""}">
+      <span class="rk-medal" aria-hidden="true">${["🥇", "🥈", "🥉"][p.pos - 1] || "🏅"}</span>
+      <b>${esc(p.name)}</b><small>${plural(p.medals, "medalha", "medalhas")}</small><span class="rk-badges">${badges(p)}</span>
+    </div>`).join("")}</div>` : `<div class="empty card"><h2 class="h2">Ninguém pontuou ainda</h2><p class="muted">As medalhas aparecem depois do primeiro jogo e da primeira votação.</p></div>`}
+  <ol class="rows card flush">${rows.map((p) => `<li class="${p.user_id === uid() ? "mine" : ""}"><div class="rowbtn rk-row">
+      <span class="num">${p.pos}</span>
+      <span class="who"><b>${esc(p.name)}</b><small>${plural(p.games, "jogo", "jogos")}${p.wins ? " · " + plural(p.wins, "vitória", "vitórias") : ""}</small></span>
+      <span class="rk-badges">${badges(p)}</span>
+      <span class="rk-count" title="medalhas de ${total}"><b>${p.medals}</b><small>/${total}</small></span>
+    </div></li>`).join("")}</ol>`;
+}
+
 async function checkAchievements() {
   const r = await sb.rpc("my_achievements");
   if (r.error || !r.data) return;
@@ -975,7 +1018,7 @@ document.addEventListener("submit", async (ev) => {
   try { await forms[f.dataset.form](f); } catch (e) { toast(errMsg(e)); } finally { if (b && b.isConnected) b.disabled = false; }
 });
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("#sheet").hidden) closeSheet(); });
-window.addEventListener("hashchange", () => { route = parseRoute(); closeSheet(); render(); window.scrollTo(0, 0); });
+window.addEventListener("hashchange", () => { route = parseRoute(); closeSheet(); render(); window.scrollTo(0, 0); if (route.name === "ranking") loadRanking(); });
 $("#backBtn").addEventListener("click", () => { location.hash = ""; });
 $("#meBtn").addEventListener("click", () => actions.me());
 
