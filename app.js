@@ -60,6 +60,7 @@ function parseRoute() {
   if (h === "admin") return { name: "admin" };
   if (h === "ranking") return { name: "ranking" };
   if (h.startsWith("p-")) return { name: "poll", id: h.slice(2) };
+  if (h === "numeros") return { name: "numeros" };
   return { name: "home" };
 }
 const uid = () => session && session.user.id;
@@ -87,6 +88,13 @@ async function refresh() {
         (e.data || []).forEach((x) => next[x.list_id] && next[x.list_id].push(x));
       }
       entries = next;
+      const tIds = lists.filter((x) => Array.isArray(x.teams) && x.teams.length).map((x) => x.id);
+      const mnext = {};
+      if (tIds.length) {
+        const mm = await sb.from("matches").select("*").in("list_id", tIds).order("created_at");
+        if (!mm.error) (mm.data || []).forEach((m) => (mnext[m.list_id] = mnext[m.list_id] || []).push(m));
+      }
+      matches = mnext;
       // votação do melhor do dia (listas com votação aberta ou que fechou há pouco)
       const vnext = {};
       await Promise.all(lists.filter(showVoting).map(async (l) => {
@@ -114,6 +122,7 @@ async function refresh() {
     }
   } catch (e) { toast(errMsg(e)); }
   if ((route.name === "ranking" || route.name === "poll") && approved()) loadRanking();
+  if (route.name === "numeros" && approved()) loadNumbers();
   render();
 }
 let refreshTimer;
@@ -126,6 +135,7 @@ function startRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "lists" }, scheduleRefresh)
     .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, scheduleRefresh)
     .on("postgres_changes", { event: "*", schema: "public", table: "polls" }, scheduleRefresh)
+    .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, scheduleRefresh)
     .subscribe();
 }
 function stopRealtime() { if (channel) { sb.removeChannel(channel); channel = null; } }
@@ -180,12 +190,14 @@ function render() {
   else if (route.name === "list") html = viewList(route.id);
   else if (route.name === "ranking") html = viewRanking();
   else if (route.name === "poll") html = viewPoll(route.id);
+  else if (route.name === "numeros") html = viewNumbers();
   else html = viewHome();
   $("#app").innerHTML = html;
 
   for (const id in keep) { const el = document.getElementById(id); if (el && el.type !== "password") el.value = keep[id]; }
   if (focusId) { const el = document.getElementById(focusId); if (el) el.focus(); }
   renderTopbar(); renderBar(); tick();
+  if (route.name === "numeros" && numTab === "mes") fillRecap();
   renderPlaylist(!!(configured && session && me && approved() && route.name === "home"));
 }
 
@@ -287,6 +299,7 @@ function viewHome() {
     <h1 class="title">Próximos jogos</h1>
   </section>
   <a class="rank-link" href="#ranking"><span aria-hidden="true">🏅</span><span><b>Ranking</b><small>Quem tem mais conquistas no racha</small></span><span class="chev" aria-hidden="true">›</span></a>
+  <a class="rank-link" href="#numeros"><span aria-hidden="true">📊</span><span><b>Racha em números</b><small>Presença, placar, caixa e retrospectiva do mês</small></span><span class="chev" aria-hidden="true">›</span></a>
   ${up.length ? `<div class="games">${cards}</div>` : `
   <div class="empty card">
     <figure class="meme"><img src="img/meme.png" alt="Meme rindo"><figcaption>Sem vôlei essa semana?</figcaption></figure>
@@ -356,6 +369,7 @@ function viewList(id) {
   </div>` : ""}
   ${mvpSection(l)}
   ${teamsSection(l)}
+  ${scoreSection(l)}
   <section class="card flush">
     <h2 class="h2 pad">Lista <small>${main.length >= spots ? "lotada" : spots - main.length + " vagas livres"}</small></h2>
     <ol class="rows">
@@ -899,6 +913,7 @@ function teamsSheet(l) {
   ${unrated ? `<p class="small muted">${unrated} sem tier. Quem não tem tier conta como 2 (meia bomba).</p>` : ""}
   <div class="notice ${ready ? "ok" : "warn"}">Levantadores: <b>${marked}</b> de ${n}. ${why}</div>
   <button class="btn lg yellow" data-act="draw" data-list="${l.id}" ${ready ? "" : "disabled"}>${Array.isArray(l.teams) && l.teams.length ? "Sortear de novo" : "Sortear times"}</button>
+  ${(matches[l.id] || []).length ? `<p class="small muted center">Sortear de novo ou apagar os times também apaga o placar desse jogo.</p>` : ""}
   ${Array.isArray(l.teams) && l.teams.length ? `<button class="btn lg ghost danger-txt" data-act="clearTeams" data-list="${l.id}" data-confirm="Apagar os times?">Apagar times</button>` : ""}`;
 }
 
@@ -911,6 +926,216 @@ function teamsText(l) {
     [t.setter, ...t.players].forEach((id, j) => out.push(`${j + 1}. ${byId[id] ? byId[id].name : "?"}${j === 0 ? " (levantador)" : ""}`));
   });
   return out.join("\n");
+}
+
+// ---------- placar e rodízio (vencedor fica, perdedor vai para o fim da fila) ----------
+let matches = {}; // { [listId]: [{ team_a, team_b, score_a, score_b, created_at }] }
+const teamName = (i) => TEAM_STYLES[i % TEAM_STYLES.length].name;
+const teamShort = (i) => teamName(i).replace("Time ", "");
+function rotation(l) {
+  const n = l.teams.length;
+  const ms = (matches[l.id] || []).slice().sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  let court = [0, 1]; const queue = [];
+  for (let i = 2; i < n; i++) queue.push(i);
+  const wins = Array(n).fill(0), played = Array(n).fill(0);
+  for (const m of ms) {
+    const w = m.score_a > m.score_b ? m.team_a : m.team_b, lo = w === m.team_a ? m.team_b : m.team_a;
+    if (w >= n || lo >= n) continue;
+    wins[w]++; played[w]++; played[lo]++;
+    const qi = queue.indexOf(w); if (qi >= 0) queue.splice(qi, 1);
+    const qj = queue.indexOf(lo); if (qj >= 0) queue.splice(qj, 1);
+    court.filter((t) => t !== w && t !== lo).forEach((t) => queue.unshift(t));
+    if (queue.length) { queue.push(lo); court = [w, queue.shift()]; } else court = [w, lo];
+  }
+  return { court, queue, wins, played, ms };
+}
+const canScore = (l) => me.is_admin || (entries[l.id] || []).some((e) => e.user_id === uid() && e.kind === "membro");
+const scoreDay = (l) => l.game_date <= todayISO() && l.game_date >= isoDate(addDays(new Date(), -1));
+function liveScore(id) { try { return JSON.parse(localStorage.getItem("racha-score-" + id)) || { a: 0, b: 0 }; } catch { return { a: 0, b: 0 }; } }
+function saveLive(id, s) { try { localStorage.setItem("racha-score-" + id, JSON.stringify(s)); } catch {} }
+
+function scoreSection(l) {
+  if (!Array.isArray(l.teams) || l.teams.length < 2 || l.game_date > todayISO()) return "";
+  const r = rotation(l), live = liveScore(l.id), edit = scoreDay(l) && canScore(l);
+  const [a, b] = r.court;
+  const side = (t, k, v) => `<button type="button" class="side ${TEAM_STYLES[t % TEAM_STYLES.length].cls}" ${edit ? `data-act="pt" data-list="${l.id}" data-side="${k}"` : "disabled"} aria-label="Ponto para ${teamName(t)}"><span>${teamShort(t)}</span><b>${v}</b></button>`;
+  return `<section class="card scoreboard">
+    <h2 class="h2">Placar <small>vencedor fica, perdedor sai</small></h2>
+    ${edit ? `<div class="court">${side(a, "a", live.a)}<span class="x">×</span>${side(b, "b", live.b)}</div>
+    <div class="tools">
+      <button class="btn sm ghost" data-act="ptMinus" data-list="${l.id}" data-side="a">−1 ${teamShort(a)}</button>
+      <button class="btn sm ghost" data-act="ptMinus" data-list="${l.id}" data-side="b">−1 ${teamShort(b)}</button>
+      <button class="btn yellow" data-act="endSet" data-list="${l.id}">Fim do set</button>
+    </div>
+    <p class="small muted">Toque no time para marcar ponto. ${r.queue.length ? `Próximo a entrar: <b>${teamName(r.queue[0])}</b>${r.queue.length > 1 ? ` (depois: ${r.queue.slice(1).map(teamShort).join(", ")})` : ""}.` : ""}</p>`
+    : `<p class="small muted">${r.ms.length ? "" : "Ninguém anotou o placar desse jogo."}</p>`}
+    ${r.ms.length ? `<h3 class="h3">Sets <small>${l.teams.map((_, i) => `${teamShort(i)} ${r.wins[i]}`).join(" · ")}</small></h3>
+    <ol class="sets">${r.ms.map((m) => `<li><span><b class="${m.score_a > m.score_b ? "w" : ""}">${teamShort(m.team_a)} ${m.score_a}</b> × <b class="${m.score_b > m.score_a ? "w" : ""}">${m.score_b} ${teamShort(m.team_b)}</b></span>
+      ${me.is_admin || m.created_by === uid() ? `<button class="btn sm ghost danger-txt" data-act="delMatch" data-id="${m.id}" data-confirm="Apagar set?">Apagar</button>` : ""}</li>`).join("")}</ol>` : ""}
+  </section>`;
+}
+
+// ---------- racha em números ----------
+const MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+const monthKey = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-01`;
+const monthLabel = (k) => { const [y, m] = k.split("-").map(Number); return `${MONTHS[m - 1]} ${y}`; };
+let numTab = "presenca", numMonth = monthKey(new Date());
+const stats = { players: null, cash: null, cashRows: [], board: {}, recap: {} };
+
+async function loadNumbers() {
+  const [ps, cs, cr] = await Promise.all([sb.rpc("player_stats"), sb.rpc("cash_summary"), sb.from("cash").select("*").order("day", { ascending: false })]);
+  stats.players = ps.error ? [] : ps.data || [];
+  stats.cash = cs.error ? null : (cs.data || [])[0] || null;
+  stats.cashRows = cr.error ? [] : (cr.data || []).sort((a, b) => (a.day < b.day ? 1 : -1));
+  await loadMonth(numMonth);
+  if (route.name === "numeros") render();
+}
+async function loadMonth(m) {
+  const [b, r] = await Promise.all([sb.rpc("month_board", { p_month: m }), sb.rpc("month_recap", { p_month: m })]);
+  stats.board[m] = b.error ? [] : (b.data || []).map((x) => ({ ...x, wins: Number(x.wins), played: Number(x.played) }));
+  stats.recap[m] = r.error ? null : r.data;
+}
+
+function monthNav() {
+  const cur = monthKey(new Date());
+  return `<div class="month-nav"><button class="btn sm ghost" data-act="numMonth" data-dir="-1" aria-label="Mês anterior">‹</button>
+    <b>${monthLabel(numMonth)}</b>
+    <button class="btn sm ghost" data-act="numMonth" data-dir="1" aria-label="Próximo mês" ${numMonth >= cur ? "disabled" : ""}>›</button></div>`;
+}
+
+function viewNumbers() {
+  const tabs = [["presenca", "Presença"], ["placar", "Placar"], ["caixa", "Caixa"], ["mes", "Mês"]];
+  let body = viewLoading();
+  if (stats.players) {
+    if (numTab === "presenca") body = numPresence();
+    else if (numTab === "placar") body = numBoard();
+    else if (numTab === "caixa") body = numCash();
+    else body = numRecap();
+  }
+  return `<section class="intro"><span class="eyebrow">Estatísticas</span><h1 class="title">Racha em números</h1></section>
+  <div class="seg four" role="tablist">${tabs.map(([k, n]) => `<button role="tab" class="${numTab === k ? "on" : ""}" data-act="numTab" data-tab="${k}">${n}</button>`).join("")}</div>
+  ${body}`;
+}
+
+function numPresence() {
+  const rows = stats.players.map((p) => ({ ...p, games: Number(p.games), last12: Number(p.last12), late: Number(p.late_drops), total: Number(p.total_lists) }))
+    .sort((a, b) => b.last12 - a.last12 || b.games - a.games || a.name.localeCompare(b.name, "pt-BR"));
+  const total = rows.length ? rows[0].total : 0;
+  if (!total) return `<div class="empty card"><h2 class="h2">Ainda sem jogos</h2><p class="muted">A presença aparece depois do primeiro jogo.</p></div>`;
+  const weeks = (d) => d ? Math.floor((Date.now() - parseDate(d).getTime()) / (7 * 864e5)) : null;
+  return `<p class="small muted">Quantas vezes cada um jogou nos últimos ${plural(total, "jogo", "jogos")} (só conta quem estava dentro das vagas). <b>Em cima da hora</b> = saiu da lista menos de 24h antes do jogo.</p>
+  <ol class="rows card flush">${rows.map((p) => {
+    const w = weeks(p.last_game), gone = w === null || w >= 3;
+    return `<li class="${p.user_id === uid() ? "mine" : ""}"><div class="rowbtn plain pres">
+      <span class="who"><b>${esc(p.name)}</b><small>${p.games ? `${plural(p.games, "jogo", "jogos")} no total` : "nunca jogou"}${p.late ? ` · <span class="late">${plural(p.late, "desistência", "desistências")} em cima da hora</span>` : ""}</small>
+        <span class="pbar" aria-hidden="true"><i style="width:${Math.round((p.last12 / total) * 100)}%"></i></span></span>
+      <span class="pres-n"><b>${p.last12}</b><small>/${total}</small>${gone ? `<span class="chip warn">${w === null ? "nunca veio" : `sumido ${w} sem.`}</span>` : ""}</span>
+    </div></li>`;
+  }).join("")}</ol>`;
+}
+
+function numBoard() {
+  const b = (stats.board[numMonth] || []).slice().sort((x, y) => y.wins - x.wins || y.wins / y.played - x.wins / x.played || x.name.localeCompare(y.name, "pt-BR"));
+  return `${monthNav()}
+  ${stats.board[numMonth] === undefined ? viewLoading() : b.length ? `<p class="small muted">Sets vencidos no mês. Cada set anotado no placar do jogo conta para todo mundo do time.</p>
+  <ol class="rows card flush">${b.map((p, i) => `<li class="${p.user_id === uid() ? "mine" : ""}"><div class="rowbtn plain brow">
+    <span class="num">${i + 1}</span><span class="who"><b>${esc(p.name)}</b><small>${plural(p.wins, "vitória", "vitórias")} em ${plural(p.played, "set", "sets")}</small></span>
+    <span class="rk-count"><b>${p.played ? Math.round((p.wins / p.played) * 100) : 0}%</b></span></div></li>`).join("")}</ol>`
+  : `<div class="empty card"><h2 class="h2">Nenhum set anotado</h2><p class="muted">No dia do jogo, abra a lista e use o <b>Placar</b> embaixo dos times.</p></div>`}`;
+}
+
+function numCash() {
+  const c = stats.cash;
+  if (!c) return `<div class="empty card"><p class="muted">Não consegui carregar o caixa.</p></div>`;
+  const rec = Number(c.received), pend = Number(c.pending), mi = Number(c.manual_in), mo = Number(c.manual_out);
+  const owing = me.is_admin ? lists.filter((l) => l.game_date <= todayISO() && Number(l.price) > 0)
+    .flatMap((l) => ordered(l).main.filter((e) => e.paid !== "confirmed").map((e) => ({ e, l }))) : [];
+  return `<section class="card cash">
+    <span class="eyebrow">Saldo do caixa</span>
+    <b class="cash-total ${rec + mi - mo < 0 ? "neg" : ""}">${money(rec + mi - mo)}</b>
+    <ul class="cash-lines">
+      <li><span>Pagamentos confirmados</span><b class="pos">+ ${money(rec)}</b></li>
+      ${mi ? `<li><span>Outras entradas</span><b class="pos">+ ${money(mi)}</b></li>` : ""}
+      <li><span>Gastos</span><b class="neg">− ${money(mo)}</b></li>
+      <li class="muted"><span>Falta receber</span><b>${money(pend)} <small>(${plural(Number(c.pending_people), "pessoa", "pessoas")})</small></b></li>
+    </ul>
+  </section>
+  ${me.is_admin ? `<section class="card">
+    <h2 class="h2">Lançar</h2>
+    <form data-form="cash" class="stack">
+      <div class="seg"><label class="kind-opt"><input type="radio" name="cKind" value="out" checked><span>Gasto</span></label><label class="kind-opt"><input type="radio" name="cKind" value="in"><span>Entrada</span></label></div>
+      <label class="field">Valor (R$)<input id="cAmount" type="number" inputmode="decimal" min="0.01" step="0.01" required placeholder="Ex.: 240"></label>
+      <label class="field">Descrição<input id="cDesc" type="text" maxlength="80" required placeholder="Ex.: Aluguel da quadra, bola nova"></label>
+      <label class="field">Data<input id="cDay" type="date" required value="${todayISO()}"></label>
+      <button class="btn lg" type="submit">Lançar</button>
+    </form>
+  </section>` : ""}
+  <section class="card">
+    <h2 class="h2">Lançamentos</h2>
+    ${stats.cashRows.length ? `<ul class="cash-rows">${stats.cashRows.map((r) => `<li><span class="who"><b>${esc(r.description)}</b><small>${pad(parseDate(r.day).getDate())}/${pad(parseDate(r.day).getMonth() + 1)}/${parseDate(r.day).getFullYear()}</small></span>
+      <b class="${r.kind === "in" ? "pos" : "neg"}">${r.kind === "in" ? "+" : "−"} ${money(r.amount)}</b>
+      ${me.is_admin ? `<button class="btn sm ghost danger-txt" data-act="delCash" data-id="${r.id}" data-confirm="Apagar?">✕</button>` : ""}</li>`).join("")}</ul>`
+    : `<p class="small muted">Nenhum gasto ou entrada lançado ainda.${me.is_admin ? " Lance o aluguel da quadra, bolas, etc." : ""}</p>`}
+  </section>
+  ${me.is_admin && owing.length ? `<section class="card"><h2 class="h2">Quem falta pagar <small>últimos jogos</small></h2>
+    <ul class="cash-rows">${owing.map(({ e, l }) => `<li><span class="who"><b>${esc(e.name)}</b><small>${esc(l.title)} ${pad(parseDate(l.game_date).getDate())}/${pad(parseDate(l.game_date).getMonth() + 1)}${e.paid === "informed" ? " · disse que pagou" : ""}</small></span>
+      <b>${money(l.price)}</b><button class="btn sm ${e.paid === "informed" ? "" : "ghost"}" data-act="setPaid" data-id="${e.id}" data-val="confirmed">Confirmar</button></li>`).join("")}</ul></section>` : ""}`;
+}
+
+function numRecap() {
+  const r = stats.recap[numMonth];
+  return `${monthNav()}
+  ${r === undefined ? viewLoading() : !r || !Number(r.games) ? `<div class="empty card"><h2 class="h2">Sem jogos nesse mês</h2><p class="muted">A retrospectiva aparece depois que tiver jogo no mês.</p></div>`
+  : `<img id="recapImg" class="recap-img" alt="Retrospectiva de ${monthLabel(numMonth)}">
+  <div class="tools"><button class="btn lg yellow" data-act="shareRecap">Compartilhar no grupo</button></div>
+  <p class="small muted center">No celular abre o menu de compartilhar. No computador, baixa a imagem.</p>`}`;
+}
+
+// card 1080x1350 desenhado no canvas
+function drawRecap(m) {
+  const r = stats.recap[m];
+  const c = document.createElement("canvas"); c.width = 1080; c.height = 1350;
+  const x = c.getContext("2d");
+  const g = x.createLinearGradient(0, 0, 1080, 1350); g.addColorStop(0, "#1d47c8"); g.addColorStop(1, "#0c1a52");
+  x.fillStyle = g; x.fillRect(0, 0, 1080, 1350);
+  x.strokeStyle = "rgba(255,255,255,.08)"; x.lineWidth = 6;
+  x.strokeRect(60, 60, 960, 1230); x.beginPath(); x.moveTo(60, 675); x.lineTo(1020, 675); x.stroke();
+  x.fillStyle = "#f7c600"; x.fillRect(90, 110, 140, 12);
+  const D = "'Barlow Condensed', 'Arial Narrow', sans-serif", B = "Inter, system-ui, sans-serif";
+  const fit = (t, max, size, weight, fam) => { let s = size; do { x.font = `${weight} ${s}px ${fam}`; s -= 2; } while (x.measureText(t).width > max && s > 20); return t; };
+  x.fillStyle = "#fff"; x.textBaseline = "alphabetic";
+  x.font = `700 40px ${B}`; x.fillStyle = "rgba(255,255,255,.75)"; x.fillText("RACHA CRIATIVO · RETROSPECTIVA", 90, 180);
+  x.fillStyle = "#fff"; fit(monthLabel(m).toUpperCase(), 900, 130, 800, D); x.fillText(monthLabel(m).toUpperCase(), 90, 310);
+  const nums = [[r.games, Number(r.games) === 1 ? "jogo" : "jogos"], [r.sets, Number(r.sets) === 1 ? "set" : "sets"], [r.players, "jogadores"]];
+  nums.forEach(([n, lab], i) => {
+    const cx = 90 + i * 310;
+    x.fillStyle = "#f7c600"; x.font = `800 110px ${D}`; x.fillText(String(n), cx, 450);
+    x.fillStyle = "rgba(255,255,255,.8)"; x.font = `600 34px ${B}`; x.fillText(lab, cx, 500);
+  });
+  const names = (arr) => arr.map((p) => p.name).join(" e ");
+  const blocks = [
+    ["🏆", "Melhor do mês", r.best, (p) => `${p.n} ${p.n === 1 ? "vitória" : "vitórias"} nas votações`],
+    ["🙋", "Mais presente", r.present, (p) => `${p.n} ${p.n === 1 ? "jogo" : "jogos"}`],
+    ["👑", "Rei da quadra", r.king, (p) => `${p.n} sets vencidos de ${p.p}`],
+  ];
+  let y = 640;
+  blocks.forEach(([icon, label, arr, sub]) => {
+    x.font = `80px ${B}`; x.fillText(icon, 90, y + 20);
+    x.fillStyle = "rgba(255,255,255,.7)"; x.font = `700 32px ${B}`; x.fillText(label.toUpperCase(), 210, y - 30);
+    x.fillStyle = "#fff";
+    if (arr && arr.length) {
+      const t = names(arr); fit(t, 780, 76, 800, D); x.fillText(t, 210, y + 40);
+      x.fillStyle = "#f7c600"; x.font = `600 32px ${B}`; x.fillText(sub(arr[0]), 210, y + 90);
+    } else { x.fillStyle = "rgba(255,255,255,.5)"; x.font = `600 44px ${B}`; x.fillText("ninguém ainda", 210, y + 30); }
+    x.fillStyle = "#fff"; y += 210;
+  });
+  x.fillStyle = "rgba(255,255,255,.6)"; x.font = `600 30px ${B}`; x.fillText("Vôlei de domingo · " + location.host + location.pathname.replace(/\/$/, ""), 90, 1260);
+  return c;
+}
+async function fillRecap() {
+  const img = $("#recapImg"); if (!img) return;
+  try { await document.fonts.ready; } catch {}
+  img.src = drawRecap(numMonth).toDataURL("image/png");
 }
 
 function addPersonSheet(l, q = "") {
@@ -1032,7 +1257,7 @@ const actions = {
   join: (d) => run(sb.rpc("join_list", { p_list: d.list }), "Você entrou!"),
   leave: async (d) => { const e = findEntry(d.list, d.id); if (await run(sb.from("entries").delete().eq("id", d.id), (e ? e.name : "") + " saiu da lista.")) closeSheet(); },
   paid: async (d) => { if (await run(sb.rpc("mark_paid", { p_entry: d.id }), "Avisado! O organizador vai confirmar.")) closeSheet(); },
-  setPaid: async (d) => { if (await run(sb.from("entries").update({ paid: d.val }).eq("id", d.id), d.val === "confirmed" ? "Pagamento confirmado." : "Marcado como não pago.")) closeSheet(); },
+  setPaid: async (d) => { if (await run(sb.from("entries").update({ paid: d.val }).eq("id", d.id), d.val === "confirmed" ? "Pagamento confirmado." : "Marcado como não pago.")) { closeSheet(); if (route.name === "numeros") setTimeout(loadNumbers, 400); } },
   pix: (d) => { const l = findList(d.list); if (l) openSheet(pixSheet(l)); },
   copyPix: (d) => { const l = findList(d.list); if (l) copy(l.pix_key, "Chave Pix copiada."); },
   copyPixCode: (d) => { const l = findList(d.list); if (l) copy(pixCode(l), "Pix copia e cola copiado. Cole no app do banco."); },
@@ -1044,6 +1269,38 @@ const actions = {
     }
   },
   newPoll: () => openSheet(pollFormHtml()),
+  pt: (d) => { const sc = liveScore(d.list); sc[d.side] = Math.min(99, sc[d.side] + 1); saveLive(d.list, sc); render(); },
+  ptMinus: (d) => { const sc = liveScore(d.list); sc[d.side] = Math.max(0, sc[d.side] - 1); saveLive(d.list, sc); render(); },
+  endSet: async (d) => {
+    const l = findList(d.list); if (!l) return;
+    const sc = liveScore(l.id), r = rotation(l);
+    if (sc.a === sc.b) return toast(sc.a ? "Empate não vale. Marque o ponto que falta." : "Marque os pontos antes de fechar o set.");
+    const row = { list_id: l.id, team_a: r.court[0], team_b: r.court[1], score_a: sc.a, score_b: sc.b, created_by: uid() };
+    const res = await sb.from("matches").insert(row).select().maybeSingle();
+    if (res.error) return toast(errMsg(res.error));
+    matches[l.id] = [...(matches[l.id] || []), res.data || { ...row, created_at: new Date().toISOString() }];
+    saveLive(l.id, { a: 0, b: 0 });
+    const w = sc.a > sc.b ? r.court[0] : r.court[1], lo = w === r.court[0] ? r.court[1] : r.court[0], nx = rotation(l);
+    toast(nx.queue.length || l.teams.length > 2 ? `${teamName(w)} fica. Sai ${teamShort(lo)}, entra ${teamShort(nx.court[1])}.` : `Set salvo! ${teamName(w)} venceu.`);
+    render(); scheduleRefresh();
+  },
+  delMatch: (d) => run(sb.from("matches").delete().eq("id", d.id), "Set apagado."),
+  numTab: (d) => { numTab = d.tab; render(); },
+  numMonth: async (d) => {
+    const [y, m] = numMonth.split("-").map(Number);
+    numMonth = monthKey(new Date(y, m - 1 + Number(d.dir), 1));
+    render();
+    if (stats.board[numMonth] === undefined || stats.recap[numMonth] === undefined) { await loadMonth(numMonth); render(); }
+  },
+  shareRecap: async () => {
+    const c = drawRecap(numMonth);
+    const blob = await new Promise((r) => c.toBlob(r, "image/png"));
+    const file = new File([blob], `racha-${numMonth.slice(0, 7)}.png`, { type: "image/png" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], text: "Retrospectiva do racha de " + monthLabel(numMonth) }); } catch {} return; }
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = file.name; document.body.appendChild(a); a.click(); a.remove();
+    toast("Imagem baixada. Mande no grupo!");
+  },
+  delCash: async (d) => { if (await run(sb.from("cash").delete().eq("id", d.id), "Lançamento apagado.")) loadNumbers(); },
   sharePoll: (d) => { const p = findPoll(d.id); if (p) copy(pollShareText(p), "Link copiado. Cole no grupo!"); },
   closePoll: (d) => run(sb.from("polls").update({ closes_at: new Date().toISOString() }).eq("id", d.id), "Votação encerrada."),
   deletePoll: async (d) => { if (await run(sb.from("polls").delete().eq("id", d.id), "Votação apagada.")) location.hash = "ranking"; },
@@ -1096,11 +1353,13 @@ const actions = {
     const l = findList(d.list); if (!l) return;
     let teams;
     try { teams = drawTeams(ordered(l).main, teamCount(l), tierOf); } catch (e) { return toast(e.message); }
+    if ((matches[l.id] || []).length) await sb.from("matches").delete().eq("list_id", l.id);
     if (await run(sb.from("lists").update({ teams, teams_at: new Date().toISOString() }).eq("id", l.id), "Times sorteados!")) {
       l.teams = teams; l.teams_at = new Date().toISOString(); closeSheet(); render();
     }
   },
-  clearTeams: async (d) => { if (await run(sb.from("lists").update({ teams: null, teams_at: null }).eq("id", d.list), "Times apagados.")) closeSheet(); },
+  clearTeams: async (d) => {
+    if ((matches[d.list] || []).length) await sb.from("matches").delete().eq("list_id", d.list); if (await run(sb.from("lists").update({ teams: null, teams_at: null }).eq("id", d.list), "Times apagados.")) closeSheet(); },
   copyTeams: (d) => { const l = findList(d.list); if (l && l.teams) copy(teamsText(l), "Times copiados. Cole no grupo!"); },
   resetPw: async (d) => {
     const r = await sb.rpc("admin_reset_password", { p_user: d.id });
@@ -1164,6 +1423,16 @@ const forms = {
     const name = clean($("#gName").value);
     if (await run(sb.rpc("add_guest", { p_list: f.dataset.list, p_name: name }), "Convidado adicionado.")) closeSheet();
   },
+  async cash(f) {
+    const kind = (f.querySelector("input[name=cKind]:checked") || {}).value || "out";
+    const amount = Math.round(Number(String($("#cAmount").value).replace(",", ".")) * 100) / 100;
+    const description = clean($("#cDesc").value).slice(0, 80);
+    if (!(amount > 0)) return toast("Coloque um valor.");
+    if (!description) return toast("Coloque uma descrição.");
+    if (await run(sb.from("cash").insert({ kind, amount, description, day: $("#cDay").value || todayISO() }), kind === "in" ? "Entrada lançada." : "Gasto lançado.")) {
+      $("#cAmount").value = ""; $("#cDesc").value = ""; loadNumbers();
+    }
+  },
   async poll(f) {
     const kind = (f.querySelector("input[name=pKind]:checked") || {}).value || "mvp";
     const list_id = $("#pList").value || null;
@@ -1215,7 +1484,7 @@ document.addEventListener("submit", async (ev) => {
   try { await forms[f.dataset.form](f); } catch (e) { toast(errMsg(e)); } finally { if (b && b.isConnected) b.disabled = false; }
 });
 document.addEventListener("keydown", (ev) => { if (ev.key === "Escape" && !$("#sheet").hidden) closeSheet(); });
-window.addEventListener("hashchange", () => { route = parseRoute(); closeSheet(); render(); window.scrollTo(0, 0); if (route.name === "ranking" || route.name === "poll") loadRanking(); });
+window.addEventListener("hashchange", () => { route = parseRoute(); closeSheet(); render(); window.scrollTo(0, 0); if (route.name === "ranking" || route.name === "poll") loadRanking(); if (route.name === "numeros") loadNumbers(); });
 $("#backBtn").addEventListener("click", () => { location.hash = ""; });
 $("#meBtn").addEventListener("click", () => actions.me());
 

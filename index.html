@@ -249,6 +249,7 @@ main {
 .rk-1 .rk-medal { font-size: 44px; }
 .rk-badges { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; }
 .rk-b { font-size: 13px; padding: 2px 6px; border-radius: 99px; background: var(--bg2); white-space: nowrap; }
+.rows .rowbtn.brow { grid-template-columns: 28px minmax(0, 1fr) auto; }
 .rk-row { grid-template-columns: 28px minmax(0, 1fr) auto auto; }
 .rk-row .rk-badges { justify-content: flex-end; max-width: 120px; }
 .rk-count { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -286,6 +287,37 @@ main {
 .vote-opt.on small { color: #3a3100; }
 .teams-vote { grid-template-columns: 1fr; }
 select { font: inherit; }
+.court { display: grid; grid-template-columns: 1fr auto 1fr; gap: 10px; align-items: center; }
+.court .x { font: 800 28px var(--display); color: var(--muted); }
+.side { display: grid; justify-items: center; gap: 2px; padding: 14px 8px; border-radius: 16px; border: 0; cursor: pointer; min-height: 132px; align-content: center; touch-action: manipulation; user-select: none; }
+.side span { font: 800 18px/1 var(--display); text-transform: uppercase; letter-spacing: .06em; opacity: .9; }
+.side b { font: 800 72px/1 var(--display); font-variant-numeric: tabular-nums; }
+.side:active { transform: scale(.97); }
+.side:disabled { cursor: default; }
+.side.t-blue { background: #1d47c8; color: #fff; } .side.t-yellow { background: #f7c600; color: #1a1400; }
+.side.t-white { background: #f4f6fb; color: #141a2e; border: 1px solid var(--border); } .side.t-green { background: #12804a; color: #fff; }
+.side.t-red { background: #b3261e; color: #fff; }
+.sets { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.sets li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; background: var(--bg2); font-variant-numeric: tabular-nums; }
+.sets b { font-weight: 500; } .sets b.w { font-weight: 800; }
+.month-nav { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; gap: 8px; text-align: center; }
+.month-nav b { font: 800 20px var(--display); text-transform: uppercase; letter-spacing: .04em; }
+.pres .who { display: grid; gap: 4px; }
+.pbar { display: block; height: 6px; border-radius: 99px; background: var(--bg2); overflow: hidden; max-width: 260px; }
+.pbar i { display: block; height: 100%; background: var(--court); border-radius: 99px; }
+.pres-n { display: grid; justify-items: end; gap: 4px; }
+.pres-n b { font: 800 22px/1 var(--display); } .pres-n small { color: var(--muted); font-size: 12px; }
+.late { color: var(--bad); font-weight: 600; }
+.cash { text-align: center; }
+.cash-total { font: 800 52px/1 var(--display); color: var(--ok); } .cash-total.neg { color: var(--bad); }
+.cash-lines, .cash-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; text-align: left; }
+.cash-lines li { display: flex; justify-content: space-between; gap: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.cash-rows li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.cash-rows li:last-child { border-bottom: 0; }
+.cash-rows .who b { display: block; overflow-wrap: anywhere; } .cash-rows .who small { color: var(--muted); font-size: 12px; }
+b.pos { color: var(--ok); } b.neg { color: var(--bad); }
+.seg .kind-opt span { text-align: center; }
+.recap-img { width: 100%; max-width: 480px; margin: 0 auto; display: block; border-radius: 16px; box-shadow: var(--shadow); aspect-ratio: 1080 / 1350; background: var(--court); }
 .btn.spotify { background: #1db954; color: #08210f; }
 /* times do dia */
 .admin-cta { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
@@ -445,6 +477,6 @@ li.free span:last-child { border: 1.5px dashed var(--border); border-radius: 10p
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
 <script src="config.js?v=1794799932502"></script>
-<script src="app.js?v=1794801217413"></script>
+<script src="app.js?v=1794802513584"></script>
 </body>
 </html>

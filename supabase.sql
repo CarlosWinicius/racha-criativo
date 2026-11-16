@@ -499,3 +499,180 @@ grant execute on function public.poll_wins() to authenticated;
 do $$ begin
   begin alter publication supabase_realtime add table public.polls; exception when duplicate_object then null; end;
 end $$;
+
+-- =====================================================================
+-- Parte 9: presença, placar (rodízio), caixa do racha e retrospectiva.
+-- =====================================================================
+-- quem saiu da lista (para contar desistência em cima da hora)
+create table if not exists public.drops (
+  id bigserial primary key,
+  list_id uuid, user_id uuid, name text,
+  dropped_at timestamptz not null default now(),
+  late boolean not null default false,
+  by_admin boolean not null default false
+);
+alter table public.drops enable row level security;
+drop policy if exists "saídas: admin vê" on public.drops;
+create policy "saídas: admin vê" on public.drops for select to authenticated using (public.is_admin());
+
+create or replace function public.log_drop() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare l lists; pos bigint; starts timestamptz;
+begin
+  if old.kind <> 'membro' then return old; end if;
+  select * into l from lists where id = old.list_id;
+  if l.id is null then return old; end if; -- a lista inteira foi apagada
+  select count(*) into pos from entries e
+    where e.list_id = old.list_id and e.kind <> 'convidado' and (e.created_at, e.id) < (old.created_at, old.id);
+  if pos >= l.spots then return old; end if; -- estava na espera: não conta
+  starts := (l.game_date + l.start_time::time) at time zone 'America/Sao_Paulo';
+  insert into drops (list_id, user_id, name, late, by_admin)
+  values (old.list_id, old.user_id, old.name, now() between starts - interval '24 hours' and starts + interval '3 hours',
+          public.is_admin() and old.user_id is distinct from auth.uid());
+  return old;
+end $$;
+drop trigger if exists on_entry_deleted on public.entries;
+create trigger on_entry_deleted after delete on public.entries for each row execute function public.log_drop();
+
+-- presença de cada um (só conta quem estava dentro das vagas)
+create or replace function public.player_stats()
+returns table (user_id uuid, name text, games bigint, last12 bigint, last_game date, late_drops bigint, total_lists bigint)
+language sql stable security definer set search_path = public as $$
+  with past as (select id, game_date, spots, row_number() over (order by game_date desc, start_time desc) rn
+                from lists where game_date < (now() at time zone 'America/Sao_Paulo')::date),
+  ent as (select e.user_id, e.kind, p.game_date, p.rn, p.spots,
+            row_number() over (partition by e.list_id order by (e.kind = 'convidado'), e.created_at, e.id) pos
+          from entries e join past p on p.id = e.list_id),
+  pe as (select * from ent where kind = 'membro' and pos <= spots)
+  select pr.id, pr.name,
+    (select count(*) from pe where pe.user_id = pr.id),
+    (select count(*) from pe where pe.user_id = pr.id and pe.rn <= 12),
+    (select max(pe.game_date) from pe where pe.user_id = pr.id),
+    (select count(*) from drops d where d.user_id = pr.id and d.late and not d.by_admin),
+    (select count(*) from past where rn <= 12)
+  from profiles pr where pr.status = 'approved' and public.is_approved()
+$$;
+
+-- placar: cada set jogado (times = posição no sorteio da lista)
+create table if not exists public.matches (
+  id uuid primary key default gen_random_uuid(),
+  list_id uuid not null references public.lists(id) on delete cascade,
+  team_a int not null, team_b int not null,
+  score_a int not null check (score_a between 0 and 99),
+  score_b int not null check (score_b between 0 and 99),
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now(),
+  check (team_a <> team_b), check (score_a <> score_b)
+);
+alter table public.matches enable row level security;
+drop policy if exists "placar: ver" on public.matches;
+drop policy if exists "placar: anotar" on public.matches;
+drop policy if exists "placar: apagar" on public.matches;
+create policy "placar: ver" on public.matches for select to authenticated using (public.is_approved());
+create policy "placar: anotar" on public.matches for insert to authenticated with check (
+  created_by = auth.uid() and (public.is_admin() or exists (
+    select 1 from public.entries e where e.list_id = matches.list_id and e.user_id = auth.uid() and e.kind = 'membro')));
+create policy "placar: apagar" on public.matches for delete to authenticated using (public.is_admin() or created_by = auth.uid());
+
+-- sets vencidos por pessoa no mês
+create or replace function public.month_board(p_month date)
+returns table (user_id uuid, name text, wins bigint, played bigint)
+language sql stable security definer set search_path = public as $$
+  with m as (select mt.team_a, mt.team_b, mt.score_a, mt.score_b, mt.id, l.teams from matches mt join lists l on l.id = mt.list_id
+    where l.game_date >= date_trunc('month', p_month)::date and l.game_date < (date_trunc('month', p_month) + interval '1 month')::date
+      and jsonb_typeof(l.teams) = 'array'),
+  side as (select id, teams -> team_a as t, score_a > score_b as won from m
+           union all select id, teams -> team_b, score_b > score_a from m),
+  mem as (select s.id, s.won, e.user_id from side s
+    cross join lateral (select s.t ->> 'setter' as eid union all select jsonb_array_elements_text(coalesce(s.t -> 'players', '[]'::jsonb))) ids
+    join entries e on e.id::text = ids.eid and e.kind = 'membro')
+  select p.id, p.name, count(*) filter (where mem.won), count(*)
+  from mem join profiles p on p.id = mem.user_id
+  where public.is_approved()
+  group by p.id, p.name
+$$;
+
+-- caixa do racha: entradas e gastos lançados pelos organizadores
+create table if not exists public.cash (
+  id uuid primary key default gen_random_uuid(),
+  kind text not null check (kind in ('in', 'out')),
+  amount numeric(10,2) not null check (amount > 0),
+  description text not null check (char_length(description) between 1 and 80),
+  day date not null default (now() at time zone 'America/Sao_Paulo')::date,
+  created_by uuid default auth.uid(),
+  created_at timestamptz not null default now()
+);
+alter table public.cash enable row level security;
+drop policy if exists "caixa: ver" on public.cash;
+drop policy if exists "caixa: admin lança" on public.cash;
+drop policy if exists "caixa: admin altera" on public.cash;
+drop policy if exists "caixa: admin apaga" on public.cash;
+create policy "caixa: ver" on public.cash for select to authenticated using (public.is_approved());
+create policy "caixa: admin lança" on public.cash for insert to authenticated with check (public.is_admin());
+create policy "caixa: admin altera" on public.cash for update to authenticated using (public.is_admin()) with check (public.is_admin());
+create policy "caixa: admin apaga" on public.cash for delete to authenticated using (public.is_admin());
+
+-- resumo do caixa: pagamentos confirmados, quanto falta e lançamentos
+create or replace function public.cash_summary()
+returns table (received numeric, pending numeric, pending_people bigint, manual_in numeric, manual_out numeric)
+language sql stable security definer set search_path = public as $$
+  with ent as (select e.paid, l.price, l.game_date, l.spots,
+      row_number() over (partition by e.list_id order by (e.kind = 'convidado'), e.created_at, e.id) pos
+    from entries e join lists l on l.id = e.list_id)
+  select coalesce(sum(price) filter (where paid = 'confirmed'), 0),
+    coalesce(sum(price) filter (where paid <> 'confirmed' and pos <= spots and game_date <= (now() at time zone 'America/Sao_Paulo')::date), 0),
+    count(*) filter (where paid <> 'confirmed' and pos <= spots and price > 0 and game_date <= (now() at time zone 'America/Sao_Paulo')::date),
+    (select coalesce(sum(amount), 0) from cash where kind = 'in'),
+    (select coalesce(sum(amount), 0) from cash where kind = 'out')
+  from ent where public.is_approved()
+$$;
+
+-- retrospectiva do mês (para o card do grupo)
+create or replace function public.month_recap(p_month date) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare m0 date := date_trunc('month', p_month)::date;
+        m1 date := (date_trunc('month', p_month) + interval '1 month')::date;
+        res jsonb;
+begin
+  if not is_approved() then raise exception 'Sem acesso.'; end if;
+  with ml as (select l.*, now() > _vote_closes(l) as vclosed from lists l
+              where l.game_date >= m0 and l.game_date < m1 and l.game_date < (now() at time zone 'America/Sao_Paulo')::date),
+  ent as (select e.user_id, e.kind, ml.spots,
+            row_number() over (partition by e.list_id order by (e.kind = 'convidado'), e.created_at, e.id) pos
+          from entries e join ml on ml.id = e.list_id),
+  pres as (select ent.user_id, count(*) n from ent where kind = 'membro' and pos <= spots group by 1),
+  dv as (select v.list_id, v.category, v.entry_id, count(*) c,
+           max(count(*)) over (partition by v.list_id, v.category) mx
+         from votes v join ml on ml.id = v.list_id where ml.vclosed group by 1, 2, 3),
+  vw as (select e.user_id from dv join entries e on e.id = dv.entry_id where dv.c = dv.mx and e.kind = 'membro'
+         union all
+         select pw.user_id from poll_wins() pw where pw.closes_at >= m0 and pw.closes_at < m1),
+  best as (select vw.user_id, count(*) n from vw group by 1),
+  board as (select * from month_board(m0))
+  select jsonb_build_object(
+    'games', (select count(*) from ml),
+    'players', (select count(*) from pres),
+    'sets', (select count(*) from matches mt join ml on ml.id = mt.list_id),
+    'present', coalesce((select jsonb_agg(jsonb_build_object('name', p.name, 'n', x.n)) from pres x join profiles p on p.id = x.user_id
+                         where x.n = (select max(n) from pres)), '[]'::jsonb),
+    'best', coalesce((select jsonb_agg(jsonb_build_object('name', p.name, 'n', x.n)) from best x join profiles p on p.id = x.user_id
+                      where x.n = (select max(n) from best)), '[]'::jsonb),
+    'king', coalesce((select jsonb_agg(jsonb_build_object('name', b.name, 'n', b.wins, 'p', b.played)) from board b
+                      where b.wins > 0 and b.wins = (select max(wins) from board)), '[]'::jsonb)
+  ) into res;
+  return res;
+end $$;
+
+revoke all on function public.player_stats() from public, anon;
+revoke all on function public.month_board(date) from public, anon;
+revoke all on function public.cash_summary() from public, anon;
+revoke all on function public.month_recap(date) from public, anon;
+grant execute on function public.player_stats() to authenticated;
+grant execute on function public.month_board(date) to authenticated;
+grant execute on function public.cash_summary() to authenticated;
+grant execute on function public.month_recap(date) to authenticated;
+
+do $$ begin
+  begin alter publication supabase_realtime add table public.matches; exception when duplicate_object then null; end;
+  begin alter publication supabase_realtime add table public.cash; exception when duplicate_object then null; end;
+end $$;
