@@ -159,10 +159,10 @@ const viewNoProfile = () => `<div class="empty"><h1 class="title">Conta sem perf
 function viewAuth() {
   const login = authTab === "login";
   return `
-  <section class="intro">
+  <section class="banner tall">
     <span class="eyebrow">Vôlei de domingo</span>
     <h1 class="title big">Racha Criativo</h1>
-    <p class="muted">Entre na lista do jogo, veja sua posição e pague pelo Pix.</p>
+    <p>Entre na lista do jogo, veja sua posição e pague pelo Pix.</p>
   </section>
   <section class="card">
     <div class="seg" role="tablist">
@@ -189,7 +189,7 @@ function viewAuth() {
 function viewPending() {
   const rejected = me.status === "rejected";
   return `<div class="empty">
-    <div class="ball" aria-hidden="true"></div>
+    <figure class="meme"><img src="img/meme.png" alt="Meme rindo"><figcaption>${rejected ? "Não foi dessa vez" : "Calma que já já te aprovam"}</figcaption></figure>
     <h1 class="title">${rejected ? "Acesso não aprovado" : "Aguardando aprovação"}</h1>
     <p class="muted">${rejected ? "Um organizador recusou seu acesso. Fale com eles no grupo." : `Oi, <b>${esc(me.name)}</b>! Sua conta foi criada. Assim que um organizador aprovar, esta tela muda sozinha.`}</p>
     <button class="btn ghost" data-act="logout">Sair da conta</button>
@@ -226,13 +226,13 @@ function viewHome() {
     </a>`;
   }).join("");
   return `
-  <section class="intro">
+  <section class="banner">
     <span class="eyebrow">Olá, ${esc(me.name)}</span>
     <h1 class="title">Próximos jogos</h1>
   </section>
   ${up.length ? `<div class="games">${cards}</div>` : `
   <div class="empty card">
-    <div class="ball" aria-hidden="true"></div>
+    <figure class="meme"><img src="img/meme.png" alt="Meme rindo"><figcaption>Sem vôlei essa semana?</figcaption></figure>
     <h2 class="h2">Nenhuma lista aberta</h2>
     <p class="muted">${me.is_admin ? "Crie a lista do próximo domingo na área do organizador." : "Os organizadores criam a lista da semana. Ela aparece aqui."}</p>
     ${me.is_admin ? `<a class="btn" href="#admin">Criar lista</a>` : ""}

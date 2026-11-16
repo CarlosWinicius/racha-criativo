@@ -27,6 +27,7 @@
   --bad: #b3261e; --bad-bg: #fde6e4;
   --me-bg: #fff7d6;
   --brand-text: #1d47c8;
+  --balls: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cdefs%3E%3Cg id='b'%3E%3Ccircle r='20'/%3E%3Cpath d='M0 0Q-2-12-11-17M0 0Q11 5 19-5M0 0Q-9 7-8 18M-17-10Q-6-3-5 12M8-18Q4-4 15 12M-19 6Q-4 2 12 16'/%3E%3C/g%3E%3C/defs%3E%3Cg fill='none' stroke='%231d47c8' stroke-opacity='.10' stroke-width='2.2' stroke-linecap='round'%3E%3Cuse href='%23b' transform='translate(42 46) rotate(-20)'/%3E%3Cuse href='%23b' transform='translate(132 128) rotate(35) scale(.7)'/%3E%3Cuse href='%23b' transform='translate(140 30) rotate(80) scale(.45)'/%3E%3C/g%3E%3C/svg%3E");
   --shadow: 0 1px 2px rgba(20, 26, 46, .06), 0 4px 14px rgba(20, 26, 46, .06);
   --display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
   --body: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -39,6 +40,7 @@
     --ok: #52d48f; --ok-bg: #113020; --warn: #f2c14e; --warn-bg: #33290f; --bad: #ff8a80; --bad-bg: #3a1714;
     --me-bg: #2b2610;
     --brand-text: #7d9cff;
+    --balls: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cdefs%3E%3Cg id='b'%3E%3Ccircle r='20'/%3E%3Cpath d='M0 0Q-2-12-11-17M0 0Q11 5 19-5M0 0Q-9 7-8 18M-17-10Q-6-3-5 12M8-18Q4-4 15 12M-19 6Q-4 2 12 16'/%3E%3C/g%3E%3C/defs%3E%3Cg fill='none' stroke='%23ffffff' stroke-opacity='.06' stroke-width='2.2' stroke-linecap='round'%3E%3Cuse href='%23b' transform='translate(42 46) rotate(-20)'/%3E%3Cuse href='%23b' transform='translate(132 128) rotate(35) scale(.7)'/%3E%3Cuse href='%23b' transform='translate(140 30) rotate(80) scale(.45)'/%3E%3C/g%3E%3C/svg%3E");
     --shadow: 0 1px 2px rgba(0, 0, 0, .3);
     color-scheme: dark;
   }
@@ -46,7 +48,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
 html, body { margin: 0; }
-body { background: var(--bg); color: var(--fg); font: 15px/1.5 var(--body); -webkit-font-smoothing: antialiased; min-height: 100vh; }
+body { background: var(--balls) 0 0 / 180px 180px repeat, var(--bg); background-attachment: fixed; color: var(--fg); font: 15px/1.5 var(--body); -webkit-font-smoothing: antialiased; min-height: 100vh; }
 body.has-bar { padding-bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
 body.locked { overflow: hidden; }
 button, input { font: inherit; color: inherit; }
@@ -161,8 +163,25 @@ main {
   background:
     linear-gradient(var(--line), var(--line)) 0 100% / 100% 4px no-repeat,
     linear-gradient(90deg, transparent calc(50% - 1px), rgba(255, 255, 255, .12) calc(50% - 1px) calc(50% + 1px), transparent calc(50% + 1px)),
-    linear-gradient(160deg, var(--court), var(--court-deep));
+    linear-gradient(160deg, rgba(29, 71, 200, .93), rgba(20, 47, 140, .86)),
+    url("img/galera.webp") center 50% / 135% auto, var(--court);
 }
+/* foto da galera no topo */
+.banner {
+  position: relative; border-radius: 18px; overflow: hidden; color: #fff; min-height: 180px;
+  display: grid; align-content: end; gap: 6px; padding: 18px 16px;
+  background:
+    linear-gradient(var(--line), var(--line)) 0 100% / 100% 4px no-repeat,
+    linear-gradient(180deg, rgba(12, 22, 64, 0) 25%, rgba(12, 22, 64, .88) 100%),
+    url("img/galera.webp") center 52% / cover, var(--court);
+}
+.banner.tall { min-height: 260px; background-size: 100% 4px, auto, 135% auto, auto; }
+.banner .eyebrow { color: var(--line); text-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
+.banner .title { color: #fff; text-shadow: 0 2px 10px rgba(0, 0, 0, .45); }
+.banner p { margin: 0; opacity: .92; text-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
+.meme { margin: 0; display: grid; justify-items: center; gap: 8px; }
+.meme img { width: 132px; height: 132px; object-fit: cover; border-radius: 50%; border: 4px solid var(--line); box-shadow: var(--shadow); }
+.meme figcaption { font: 700 15px/1.2 var(--display); text-transform: uppercase; letter-spacing: .05em; background: var(--line); color: #1a1400; padding: 4px 10px; border-radius: 8px; transform: rotate(-2deg); }
 .hero-top { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 14px; align-items: center; }
 .hero .dbadge { background: rgba(0, 0, 0, .25); }
 .hero .eyebrow { color: var(--line); }
