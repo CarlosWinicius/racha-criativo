@@ -285,6 +285,10 @@ function viewList(id) {
     <div class="meter light"><i style="width:${Math.min(100, (main.length / spots) * 100)}%"></i></div>
   </section>
   ${notice}
+  ${me.is_admin && !isPast(l) && !(Array.isArray(l.teams) && l.teams.length) ? `<div class="notice ${main.length >= spots ? "ok" : ""} admin-cta">
+    <span>${main.length >= spots ? "<b>Lista completa!</b> Hora de sortear os times." : `Times: o sorteio libera quando a lista completar (${main.length}/${spots}).`}</span>
+    <button class="btn sm ${main.length >= spots ? "yellow" : "ghost"}" data-act="teams" data-list="${l.id}">${main.length >= spots ? "Sortear times" : "Marcar levantadores"}</button>
+  </div>` : ""}
   ${teamsSection(l)}
   <section class="card flush">
     <h2 class="h2 pad">Lista <small>${main.length >= spots ? "lotada" : spots - main.length + " vagas livres"}</small></h2>
@@ -342,6 +346,7 @@ function viewAdmin() {
           <span class="mini-acts">
             <a class="btn sm ghost" href="#l-${l.id}">Ver</a>
             <button class="btn sm ghost" data-act="editList" data-id="${l.id}">Editar</button>
+            <button class="btn sm ghost" data-act="teams" data-list="${l.id}">Sortear times</button>
             <button class="btn sm ghost" data-act="repeatList" data-id="${l.id}">Repetir +7 dias</button>
             <button class="btn sm ghost danger-txt" data-act="deleteList" data-id="${l.id}" data-confirm="Apagar mesmo?">Apagar</button>
           </span>
